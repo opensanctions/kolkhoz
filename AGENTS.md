@@ -13,7 +13,7 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 
 - **Python** 3.13+ managed by **uv**.
 - **SQLite** for structured results (extracted humans, positions, links to Pravda snapshots).
-- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)) for web page capture and storage. Runs locally at `http://127.0.0.1:8000`. Kolkhoz hits Pravda's FastAPI and reads returned file paths directly from disk. OpenAPI spec is at `http://127.0.0.1:8000/openapi.json`.
+- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)) for web page capture and storage. The base URL is set in `PRAVDA_URL` (see `.env`). Kolkhoz hits Pravda's FastAPI and reads returned file paths directly from disk.
 
 ## Project structure
 
@@ -26,6 +26,9 @@ scripts/           # standalone scripts for running experiments
 
 - Dependencies are added with `uv add`. Don't edit `pyproject.toml` manually.
 - Keep imports at the top of each file. No lazy imports unless there's a real cost.
+- Environment-specific config goes in `.env`, loaded by `python-dotenv`.
+- Read env vars with `os.environ` in the module that needs them.
+- True constants (paths, format strings, etc.) live in the module that uses them.
 - The user manages git commits, branching, etc.
 
 ## Running

@@ -33,6 +33,12 @@ def snapshot_url(url: str) -> dict:
         return resp.json()
 
 
+async def async_snapshot_url(url: str) -> dict:
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(f"{PRAVDA_URL}/snapshots", json={"url": url})
+        return resp.json()
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <url>", file=sys.stderr)

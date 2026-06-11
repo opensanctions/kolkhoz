@@ -3,7 +3,6 @@
 import csv
 import os
 
-import json
 
 import httpx
 from dotenv import load_dotenv
@@ -12,6 +11,22 @@ load_dotenv()
 
 PRAVDA_URL = os.environ["PRAVDA_URL"]
 CSV_PATH = "data/hio_leadership.csv"
+
+
+def format_snapshot(data: dict) -> str:
+    lines = []
+    for key in ["id", "url", "captured_at", "http_status", "error"]:
+        if key in data:
+            lines.append(f"  {key}: {data[key]}")
+    if "contents" in data:
+        lines.append("  contents:")
+        for c in data["contents"]:
+            lines.append(f"    {c['content_type']}: {c['path']}")
+    if "headers" in data:
+        lines.append("  headers:")
+        for h in data["headers"]:
+            lines.append(f"    {h['name']}: {h['value']}")
+    return "\n".join(lines)
 
 
 def load_urls(path: str) -> list[str]:
@@ -27,8 +42,8 @@ def main() -> None:
     with httpx.Client(timeout=120) as client:
         for url in urls:
             resp = client.post(f"{PRAVDA_URL}/snapshots", json={"url": url})
-            print(f"  [{resp.status_code}] {url}")
-            print(json.dumps(resp.json(), indent=2))
+            data = resp.json()
+            print(format_snapshot(data))
 
 
 if __name__ == "__main__":

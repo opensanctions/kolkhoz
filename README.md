@@ -1,6 +1,6 @@
 # Kolkhoz
 
-Kolkhoz turns the internet into lists of politicians. It orchestrates web capture (via [Pravda](https://github.com/johan/pravda)), LLM extraction, and structured storage to pull political position holders out of web pages.
+Kolkhoz turns the internet into lists of politicians. It orchestrates web capture (via [Pravda](https://github.com/opensanctions/pravda)), LLM extraction, and structured storage to pull political position holders out of web pages.
 
 ## Status
 

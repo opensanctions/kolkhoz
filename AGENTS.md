@@ -41,12 +41,6 @@ uv sync
 uv run python scripts/some_experiment.py
 ```
 
-## Adding dependencies
-
-```bash
-uv add <package>
-```
-
 ## Linting and formatting
 
 Pre-commit hooks run automatically on every commit:

@@ -88,8 +88,6 @@ async def run_batch(
 ) -> list[dict]:
     """Process *urls*, merge into *out_path* (which doubles as the cache), and
     return this run's records."""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
     by_url = {record["url"]: record for record in read_jsonl(out_path)}
     content_cache = build_content_cache(list(by_url.values()))
     log.info(

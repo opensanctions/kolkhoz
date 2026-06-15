@@ -9,13 +9,14 @@ and write.
 """
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import httpx
 
 from kolkhoz import pravda
-from kolkhoz.extract import MODEL, PROMPT_VERSION
+from kolkhoz.extract import PROMPT_VERSION
 from kolkhoz.utils import build_content_cache, read_jsonl, write_jsonl
 
 # requires(snapshot) -> miss reason if a needed artifact is absent, else None.
@@ -40,7 +41,7 @@ async def process_url(
                 "url": url,
                 "snapshot_id": None,
                 "text_hash": None,
-                "model": MODEL,
+                "model": os.environ["OPENAI_MODEL"],
                 "prompt_version": PROMPT_VERSION,
                 "status": "miss",
                 "reason": "no_snapshot",
@@ -53,7 +54,7 @@ async def process_url(
             "url": url,
             "snapshot_id": snapshot["id"],
             "text_hash": text_hash,
-            "model": MODEL,
+            "model": os.environ["OPENAI_MODEL"],
             "prompt_version": PROMPT_VERSION,
         }
 

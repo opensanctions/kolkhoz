@@ -9,13 +9,13 @@ part of the cache key, so stale extractions get re-run.
 """
 
 import base64
+import os
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 client = AsyncOpenAI()
 
-MODEL = "gpt-5.4-mini"
 PROMPT_VERSION = "v2"
 REASONING_EFFORT = "low"
 
@@ -56,7 +56,7 @@ class Extraction(BaseModel):
 
 async def _parse(page_content: list[dict]) -> tuple[Extraction, dict]:
     response = await client.responses.parse(
-        model=MODEL,
+        model=os.environ["OPENAI_MODEL"],
         instructions=INSTRUCTIONS,
         input=[{"role": "user", "content": page_content}],
         reasoning={"effort": REASONING_EFFORT},

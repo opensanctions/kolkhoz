@@ -1,7 +1,8 @@
 import json
+import os
 from pathlib import Path
 
-from kolkhoz.extract import MODEL, PROMPT_VERSION
+from kolkhoz.extract import PROMPT_VERSION
 
 RESULT_FIELDS = ("status", "reason", "holders", "usage")
 
@@ -25,6 +26,6 @@ def build_content_cache(records: list[dict]) -> dict[str, dict]:
         record["text_hash"]: {field: record[field] for field in RESULT_FIELDS}
         for record in records
         if record.get("text_hash")
-        and record.get("model") == MODEL
+        and record.get("model") == os.environ["OPENAI_MODEL"]
         and record.get("prompt_version") == PROMPT_VERSION
     }

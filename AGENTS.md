@@ -18,7 +18,7 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 
 ```
 kolkhoz/           # shared library code
-*.py               # standalone scripts (tier0_filter.py, extract_tier1.py, etc.)
+*.py               # standalone scripts
 ```
 
 ## Conventions

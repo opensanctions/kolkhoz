@@ -7,7 +7,7 @@ import csv
 from snapshot_url import async_snapshot_url, format_snapshot
 
 DEFAULT_CSV = "data/hio_leadership.csv"
-DEFAULT_CONCURRENCY = 10
+DEFAULT_CONCURRENCY = 5
 
 
 def load_urls(path: str) -> list[str]:
@@ -32,13 +32,17 @@ async def main() -> None:
     print(f"Found {len(urls)} unique URLs in {args.csv_path}")
 
     sem = asyncio.Semaphore(args.concurrency)
+    tasks = []
 
     async def limited_snapshot(url: str) -> dict:
         async with sem:
             return await async_snapshot_url(url)
 
-    for coro in asyncio.as_completed(limited_snapshot(url) for url in urls):
-        data = await coro
+    for url in urls:
+        tasks.append(asyncio.create_task(limited_snapshot(url)))
+
+    for task in asyncio.as_completed(tasks):
+        data = await task
         print(format_snapshot(data))
 
 

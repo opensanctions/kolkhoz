@@ -1,7 +1,7 @@
 [project]
 name = "kolkhoz"
 version = "0.1.0"
-description = "Add your description here"
+description = "Orchestrate web capture and LLM extraction of political position holders into structured data."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

@@ -25,5 +25,9 @@ uv sync
 ## Usage
 
 ```bash
-uv run python scripts/some_experiment.py
+# Snapshot a single URL
+uv run python scripts/snapshot_url.py https://example.org
+
+# Snapshot all pep_urls from a CSV
+uv run python scripts/snapshot_urls_from_csv.py data/hio_leadership.csv
 ```

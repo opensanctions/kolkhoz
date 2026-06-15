@@ -1,13 +1,13 @@
 """Tier 2 extraction: for the pages tier 1 missed, re-run with the full-page
 screenshot added to the text.
 
-Reads only what tier 1 left behind locally (data/tier1.jsonl) — no CSV, no
-sampling. The screenshot catches names that the rendered text didn't carry
-(JS shells, text baked into images). Results land in data/tier2.jsonl, same
-shape as tier 1, and the file doubles as the cache (keyed by text hash).
+Reads misses from data/tier1_misses.jsonl (produced by tier 1). The screenshot
+catches names that the rendered text didn't carry (JS shells, text baked into
+images). Results land in data/tier2.jsonl.
 """
 
 import asyncio
+import logging
 from pathlib import Path
 
 from kolkhoz import pravda
@@ -15,7 +15,9 @@ from kolkhoz.extract import extract_from_text_and_image
 from kolkhoz.pipeline import run_batch
 from kolkhoz.utils import read_jsonl
 
-TIER1_PATH = Path("data/tier1.jsonl")
+log = logging.getLogger(__name__)
+
+TIER1_MISSES_PATH = Path("data/tier1_misses.jsonl")
 OUT_PATH = Path("data/tier2.jsonl")
 CONCURRENCY = 3  # images are token-heavy; keep this lower than tier 1
 
@@ -34,9 +36,13 @@ async def extract(snapshot: dict) -> dict:
 
 
 async def main() -> None:
-    tier1 = read_jsonl(TIER1_PATH)
-    misses = [record for record in tier1 if record["status"] == "miss"]
-    print(f"{len(misses)} tier-1 miss(es) to retry with screenshot")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    )
+
+    misses = read_jsonl(TIER1_MISSES_PATH)
+    log.info("%d tier-1 miss(es) to retry with screenshot", len(misses))
     if not misses:
         return
 
@@ -47,10 +53,12 @@ async def main() -> None:
         extract=extract,
         concurrency=CONCURRENCY,
         timeout=120,
+        snapshot_by_url={r["url"]: r["snapshot"] for r in misses},
     )
 
     rescued = sum(1 for record in results if record["status"] == "hit")
-    print(f"  {rescued} rescued, {len(results) - rescued} still miss → {OUT_PATH}")
+    still_miss = len(results) - rescued
+    log.info("%d rescued, %d still miss → %s", rescued, still_miss, OUT_PATH)
 
 
 if __name__ == "__main__":

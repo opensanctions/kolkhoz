@@ -3,7 +3,9 @@
 import asyncio
 import csv
 from collections import defaultdict
+from pathlib import Path
 
+import click
 import httpx
 from dotenv import load_dotenv
 import os
@@ -11,7 +13,7 @@ import os
 load_dotenv()
 
 PRAVDA_URL = os.environ["PRAVDA_URL"]
-CSV_PATH = "data/hio_leadership.csv"
+DEFAULT_CSV = Path.home() / "Documents" / "hio_leadership.csv"
 CONCURRENCY = 10
 
 
@@ -32,9 +34,9 @@ async def check_snapshot(client: httpx.AsyncClient, url: str) -> dict:
         return {"error": str(e), "items": [], "total": 0}
 
 
-async def main() -> None:
-    urls = load_urls(CSV_PATH)
-    print(f"Loaded {len(urls)} unique URLs from {CSV_PATH}\n")
+async def run(csv_path: str) -> None:
+    urls = load_urls(csv_path)
+    print(f"Loaded {len(urls)} unique URLs from {csv_path}\n")
 
     sem = asyncio.Semaphore(CONCURRENCY)
 
@@ -121,5 +123,11 @@ async def main() -> None:
         print(f"  {ct}: {missing_content[ct]}")
 
 
+@click.command(help=__doc__)
+@click.argument("csv_path", type=click.Path(exists=True), default=str(DEFAULT_CSV))
+def main(csv_path: str) -> None:
+    asyncio.run(run(csv_path))
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

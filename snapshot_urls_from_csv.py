@@ -1,13 +1,14 @@
 """Snapshot all pep_urls from a CSV through Pravda."""
 
-import argparse
 import asyncio
 import csv
+from pathlib import Path
+
+import click
 
 from snapshot_url import async_snapshot_url, format_snapshot
 
-DEFAULT_CSV = "data/hio_leadership.csv"
-DEFAULT_CONCURRENCY = 5
+DEFAULT_CSV = Path.home() / "Documents" / "hio_leadership.csv"
 
 
 def load_urls(path: str) -> list[str]:
@@ -16,22 +17,11 @@ def load_urls(path: str) -> list[str]:
         return sorted({row["pep_url"] for row in reader if row["pep_url"].strip()})
 
 
-async def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("csv_path", nargs="?", default=DEFAULT_CSV)
-    parser.add_argument(
-        "-c",
-        "--concurrency",
-        type=int,
-        default=DEFAULT_CONCURRENCY,
-        help="Max concurrent requests to Pravda (default: %(default)s)",
-    )
-    args = parser.parse_args()
+async def run(csv_path: str, concurrency: int) -> None:
+    urls = load_urls(csv_path)
+    print(f"Found {len(urls)} unique URLs in {csv_path}")
 
-    urls = load_urls(args.csv_path)
-    print(f"Found {len(urls)} unique URLs in {args.csv_path}")
-
-    sem = asyncio.Semaphore(args.concurrency)
+    sem = asyncio.Semaphore(concurrency)
     tasks = []
 
     async def limited_snapshot(url: str) -> dict:
@@ -46,5 +36,18 @@ async def main() -> None:
         print(format_snapshot(data))
 
 
+@click.command(help=__doc__)
+@click.argument("csv_path", type=click.Path(exists=True), default=str(DEFAULT_CSV))
+@click.option(
+    "-c",
+    "--concurrency",
+    type=int,
+    default=5,
+    help="Max concurrent requests to Pravda.",
+)
+def main(csv_path: str, concurrency: int) -> None:
+    asyncio.run(run(csv_path, concurrency))
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

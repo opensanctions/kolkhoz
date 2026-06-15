@@ -1,26 +1,32 @@
 """Tier 1 extraction: feed each URL's latest Pravda snapshot text to the LLM
 and record the position holders it finds.
 
-Reads URLs from data/tier0.jsonl (pass-only). Results land in data/tier1.jsonl,
-one object per URL, which also serves as the cache: a page whose snapshot text
-was already extracted (same text hash, prompt version, model) is reused without
-an LLM call. Repeated runs accumulate.
+Reads URLs from data/tier0.jsonl (pass-only). Results land in two files:
+  - data/tier1.jsonl: hits (extracted holders). Also serves as the cache.
+  - data/tier1_misses.jsonl: misses with full snapshot data, for tier 2.
 
-Each record:
+Each hit record:
   {url, snapshot_id, text_hash, model, prompt_version,
-   status: "hit"|"miss", reason, holders: [{human, position}], usage}
+   holders: [{human, position}], usage}
+
+Each miss record:
+  {url, snapshot_id, snapshot}
 """
 
 import asyncio
+import logging
 from pathlib import Path
 
 from kolkhoz import pravda
 from kolkhoz.extract import extract_from_text
 from kolkhoz.pipeline import run_batch
-from kolkhoz.utils import read_jsonl
+from kolkhoz.utils import read_jsonl, write_jsonl
+
+log = logging.getLogger(__name__)
 
 TIER0_PATH = Path("data/tier0.jsonl")
 OUT_PATH = Path("data/tier1.jsonl")
+MISSES_PATH = Path("data/tier1_misses.jsonl")
 CONCURRENCY = 5
 
 
@@ -37,36 +43,49 @@ async def extract(snapshot: dict) -> dict:
     return {"status": status, "reason": reason, "holders": holders, "usage": usage}
 
 
-def persist_if(record: dict) -> bool:
-    """Only persist hits."""
-    return record["status"] == "hit"
-
-
 async def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    )
+
     tier0 = read_jsonl(TIER0_PATH)
-    print(f"{len(tier0)} tier-0 record(s) to extract")
+    log.info("%d tier-0 record(s) to extract", len(tier0))
     if not tier0:
         return
 
+    snapshot_by_url = {r["url"]: r["snapshot"] for r in tier0}
     results = await run_batch(
         [record["url"] for record in tier0],
         OUT_PATH,
         requires=requires,
         extract=extract,
-        persist_if=persist_if,
         concurrency=CONCURRENCY,
         timeout=60,
-        snapshot_by_url={r["url"]: r["snapshot"] for r in tier0},
+        snapshot_by_url=snapshot_by_url,
     )
 
-    hits = sum(1 for record in results if record["status"] == "hit")
+    hits = [record for record in results if record["status"] == "hit"]
     misses = [record for record in results if record["status"] == "miss"]
-    print(f"  {hits} hit, {len(misses)} miss → {OUT_PATH}")
+    log.info("%d hit, %d miss → %s", len(hits), len(misses), OUT_PATH)
+
+    # Write misses with snapshot data for tier 2
+    if misses:
+        miss_records = [
+            {
+                "url": r["url"],
+                "snapshot_id": r["snapshot_id"],
+                "snapshot": snapshot_by_url[r["url"]],
+            }
+            for r in misses
+        ]
+        write_jsonl(MISSES_PATH, miss_records)
+        log.info("Wrote %d miss(es) → %s", len(miss_records), MISSES_PATH)
     reasons: dict[str, int] = {}
     for record in misses:
         reasons[record["reason"]] = reasons.get(record["reason"], 0) + 1
     for reason, count in sorted(reasons.items()):
-        print(f"    miss/{reason}: {count}")
+        log.info("  miss/%s: %d", reason, count)
 
 
 if __name__ == "__main__":

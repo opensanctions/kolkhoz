@@ -33,22 +33,9 @@ async def process_url(
     *,
     requires: Requires,
     extract: Extract,
+    snapshot: dict,
 ) -> dict:
     async with sem:
-        snapshot = await pravda.latest_snapshot(client, url)
-        if snapshot is None:
-            return {
-                "url": url,
-                "snapshot_id": None,
-                "text_hash": None,
-                "model": os.environ["OPENAI_MODEL"],
-                "prompt_version": PROMPT_VERSION,
-                "status": "miss",
-                "reason": "no_snapshot",
-                "holders": [],
-                "usage": None,
-            }
-
         text_hash = pravda.content_hash(snapshot, pravda.TEXT)
         base = {
             "url": url,
@@ -85,6 +72,7 @@ async def run_batch(
     extract: Extract,
     concurrency: int,
     timeout: float,
+    snapshot_by_url: dict[str, dict],
 ) -> list[dict]:
     """Process *urls*, merge into *out_path* (which doubles as the cache), and
     return this run's records."""
@@ -98,7 +86,13 @@ async def run_batch(
         results = await asyncio.gather(
             *[
                 process_url(
-                    client, url, content_cache, sem, requires=requires, extract=extract
+                    client,
+                    url,
+                    content_cache,
+                    sem,
+                    requires=requires,
+                    extract=extract,
+                    snapshot=snapshot_by_url[url],
                 )
                 for url in urls
             ]

@@ -37,21 +37,26 @@ async def extract(snapshot: dict) -> dict:
     return {"status": status, "reason": reason, "holders": holders, "usage": usage}
 
 
+def persist_if(record: dict) -> bool:
+    """Only persist hits."""
+    return record["status"] == "hit"
+
+
 async def main() -> None:
     tier0 = read_jsonl(TIER0_PATH)
-    passes = [record for record in tier0 if record["status"] == "pass"]
-    print(f"{len(passes)} tier-0 pass(es) to extract")
-    if not passes:
+    print(f"{len(tier0)} tier-0 record(s) to extract")
+    if not tier0:
         return
 
     results = await run_batch(
-        [record["url"] for record in passes],
+        [record["url"] for record in tier0],
         OUT_PATH,
         requires=requires,
         extract=extract,
+        persist_if=persist_if,
         concurrency=CONCURRENCY,
         timeout=60,
-        snapshot_by_url={r["url"]: r["snapshot"] for r in passes},
+        snapshot_by_url={r["url"]: r["snapshot"] for r in tier0},
     )
 
     hits = sum(1 for record in results if record["status"] == "hit")

@@ -64,12 +64,16 @@ async def process_url(
         return {**base, **result}
 
 
+PersistFilter = Callable[[dict], bool]
+
+
 async def run_batch(
     urls: list[str],
     out_path: Path,
     *,
     requires: Requires,
     extract: Extract,
+    persist_if: PersistFilter | None = None,
     concurrency: int,
     timeout: float,
     snapshot_by_url: dict[str, dict],
@@ -99,6 +103,9 @@ async def run_batch(
         )
 
     for record in results:
-        by_url[record["url"]] = record
+        if persist_if is None or persist_if(record):
+            by_url[record["url"]] = {
+                k: v for k, v in record.items() if k not in ("status", "reason")
+            }
     write_jsonl(out_path, by_url.values())
     return results

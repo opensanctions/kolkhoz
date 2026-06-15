@@ -1,12 +1,11 @@
 """Tier 0 filter: check whether each URL's latest Pravda snapshot has enough
 text to be worth LLM extraction.
 
-Reads a CSV of URLs (--csv), optionally samples N of them (--sample), fetches
-the latest Pravda snapshot for each, and classifies the text as pass (enough
-content) or miss (too short / missing). No LLM calls — just Pravda lookups.
+Reads a CSV of URLs, fetches the latest Pravda snapshot for each, and keeps
+only those with enough text content. No LLM calls — just Pravda lookups.
 
-Results land in data/tier0.jsonl, one record per URL. The file doubles as the
-cache: a URL already present is reused without a new Pravda lookup.
+Passing records land in data/tier0.jsonl (without status/reason fields).
+The file doubles as cache: a URL already present is reused without a new lookup.
 """
 
 import argparse
@@ -22,7 +21,7 @@ from kolkhoz.utils import read_jsonl, write_jsonl
 
 DEFAULT_CSV = "data/hio_leadership.csv"
 OUT_PATH = Path("data/tier0.jsonl")
-MIN_TEXT_CHARS = 200  # below this the page is likely a JS shell, not real content
+MIN_TEXT_CHARS = 200
 CONCURRENCY = 10
 DEFAULT_SAMPLE = 20
 
@@ -59,9 +58,8 @@ async def check_url(
                 "reason": "no_snapshot",
             }
 
-        text_item = pravda.content(snapshot, pravda.TEXT)
         text_hash = pravda.content_hash(snapshot, pravda.TEXT)
-        text = pravda.read_text(text_item)
+        text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
         status, reason = classify(text)
 
         return {
@@ -72,6 +70,11 @@ async def check_url(
             "status": status,
             "reason": reason,
         }
+
+
+def record_for_output(record: dict) -> dict:
+    """Strip classification fields, keep only what goes into tier0.jsonl."""
+    return {k: v for k, v in record.items() if k not in ("status", "reason")}
 
 
 async def main() -> None:
@@ -87,16 +90,16 @@ async def main() -> None:
     args = parser.parse_args()
 
     # Seed from existing output so repeated runs accumulate.
-    by_url = {record["url"]: record for record in read_jsonl(OUT_PATH)}
+    by_url = {r["url"]: r for r in read_jsonl(OUT_PATH)}
 
     urls = load_urls(args.csv_path)
     if args.sample < len(urls):
         urls = random.sample(urls, args.sample)
 
-    # Skip URLs we already checked.
     new_urls = [u for u in urls if u not in by_url]
     print(f"Processing {len(urls)} URL(s) ({len(new_urls)} new)")
 
+    results = []
     if new_urls:
         sem = asyncio.Semaphore(CONCURRENCY)
         async with httpx.AsyncClient(timeout=30) as client:
@@ -104,19 +107,32 @@ async def main() -> None:
                 *[check_url(client, url, sem) for url in new_urls]
             )
         for record in results:
-            by_url[record["url"]] = record
+            if record["status"] == "pass":
+                by_url[record["url"]] = record_for_output(record)
         write_jsonl(OUT_PATH, by_url.values())
 
-    # Summary for this run's URLs.
-    this_run = [by_url[u] for u in urls]
-    passes = sum(1 for r in this_run if r["status"] == "pass")
-    misses = [r for r in this_run if r["status"] == "miss"]
+    # Summary for this run's new URLs.
+    passes = sum(1 for r in results if r["status"] == "pass")
+    misses = [r for r in results if r["status"] == "miss"]
     print(f"  {passes} pass, {len(misses)} miss → {OUT_PATH}")
+
     reasons: dict[str, int] = {}
     for record in misses:
         reasons[record["reason"]] = reasons.get(record["reason"], 0) + 1
     for reason, count in sorted(reasons.items()):
         print(f"    miss/{reason}: {count}")
+
+    for record in misses:
+        snapshot = record.get("snapshot")
+        if snapshot is None:
+            continue
+        text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
+        if text:
+            preview = text.strip()[:500]
+            if len(text.strip()) > 500:
+                preview += "…"
+            print(f"\n    --- {record['url']} ---")
+            print(f"    {preview}")
 
 
 if __name__ == "__main__":

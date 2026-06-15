@@ -30,4 +30,7 @@ uv run python scripts/snapshot_url.py https://example.org
 
 # Snapshot all pep_urls from a CSV
 uv run python scripts/snapshot_urls_from_csv.py data/hio_leadership.csv
+
+# Analyze Pravda snapshot results
+uv run python scripts/analyze_pravda_results.py
 ```

@@ -8,8 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PRAVDA_URL = os.environ["PRAVDA_URL"]
-
 
 def format_snapshot(data: dict) -> str:
     lines = []
@@ -29,13 +27,15 @@ def format_snapshot(data: dict) -> str:
 
 def snapshot_url(url: str) -> dict:
     with httpx.Client(timeout=120) as client:
-        resp = client.post(f"{PRAVDA_URL}/snapshots", json={"url": url})
+        resp = client.post(f"{os.environ['PRAVDA_URL']}/snapshots", json={"url": url})
         return resp.json()
 
 
 async def async_snapshot_url(url: str) -> dict:
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(f"{PRAVDA_URL}/snapshots", json={"url": url})
+        resp = await client.post(
+            f"{os.environ['PRAVDA_URL']}/snapshots", json={"url": url}
+        )
         return resp.json()
 
 

@@ -13,8 +13,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PRAVDA_URL = os.environ["PRAVDA_URL"]
-
 # Content types Pravda captures, by their MIME type.
 TEXT = "text/plain"  # inner_text("body") — the rendered, tag-stripped page text
 SCREENSHOT = "image/png"  # full-page screenshot
@@ -22,7 +20,9 @@ SCREENSHOT = "image/png"  # full-page screenshot
 
 async def latest_snapshot(client: httpx.AsyncClient, url: str) -> dict | None:
     """Return the most recent snapshot for *url*, or None if there are none."""
-    resp = await client.get(f"{PRAVDA_URL}/snapshots", params={"url": url})
+    resp = await client.get(
+        f"{os.environ['PRAVDA_URL']}/snapshots", params={"url": url}
+    )
     resp.raise_for_status()
     items = resp.json().get("items", [])
     return items[0] if items else None  # the API returns newest first

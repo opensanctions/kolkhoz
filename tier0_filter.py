@@ -18,11 +18,6 @@ import httpx
 from kolkhoz import pravda
 from kolkhoz.utils import read_jsonl, write_jsonl
 
-DEFAULT_CSV = Path.home() / "Documents" / "hio_leadership.csv"
-OUT_PATH = Path("data/tier0.jsonl")
-MIN_TEXT_CHARS = 200
-CONCURRENCY = 10
-
 
 def load_urls(path: str) -> list[str]:
     with open(path) as f:
@@ -36,6 +31,7 @@ async def fetch_snapshot(
     client: httpx.AsyncClient,
     url: str,
     sem: asyncio.Semaphore,
+    min_text_chars: int,
 ) -> dict | None:
     async with sem:
         snapshot = await pravda.latest_snapshot(client, url)
@@ -44,7 +40,7 @@ async def fetch_snapshot(
             return None
 
         text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
-        if not text or len(text.strip()) < MIN_TEXT_CHARS:
+        if not text or len(text.strip()) < min_text_chars:
             preview = (text or "").strip()
             print(
                 f"  skip {url} — text too short ({len(text.strip()) if text else 0} chars)"
@@ -61,8 +57,10 @@ async def fetch_snapshot(
         }
 
 
-async def run(csv_path: str, sample: int) -> None:
-    by_url = {r["url"]: r for r in read_jsonl(OUT_PATH)}
+async def run(
+    csv_path: str, sample: int, out_path: Path, min_text_chars: int, concurrency: int
+) -> None:
+    by_url = {r["url"]: r for r in read_jsonl(out_path)}
 
     urls = load_urls(csv_path)
     if sample < len(urls):
@@ -72,25 +70,43 @@ async def run(csv_path: str, sample: int) -> None:
     print(f"Processing {len(urls)} URL(s) ({len(new_urls)} new)")
 
     if new_urls:
-        sem = asyncio.Semaphore(CONCURRENCY)
+        sem = asyncio.Semaphore(concurrency)
         async with httpx.AsyncClient(timeout=30) as client:
             results = await asyncio.gather(
-                *[fetch_snapshot(client, url, sem) for url in new_urls]
+                *[fetch_snapshot(client, url, sem, min_text_chars) for url in new_urls]
             )
         for record in results:
             if record is not None:
                 by_url[record["url"]] = record
-        write_jsonl(OUT_PATH, by_url.values())
+        write_jsonl(out_path, by_url.values())
 
     kept = sum(1 for r in results if r is not None)
-    print(f"  {kept} kept, {len(new_urls) - kept} skipped → {OUT_PATH}")
+    print(f"  {kept} kept, {len(new_urls) - kept} skipped → {out_path}")
 
 
 @click.command(help=__doc__)
-@click.argument("csv_path", type=click.Path(exists=True), default=str(DEFAULT_CSV))
+@click.argument("csv_path", type=click.Path(exists=True))
 @click.option("-n", "--sample", type=int, default=20, help="Randomly sample N URLs.")
-def main(csv_path: str, sample: int) -> None:
-    asyncio.run(run(csv_path, sample))
+@click.option(
+    "-o",
+    "--out-path",
+    type=click.Path(),
+    default="data/tier0.jsonl",
+    help="Output JSONL path.",
+)
+@click.option(
+    "--min-text-chars",
+    type=int,
+    default=200,
+    help="Minimum text characters to keep a snapshot.",
+)
+@click.option(
+    "-c", "--concurrency", type=int, default=10, help="Max concurrent Pravda requests."
+)
+def main(
+    csv_path: str, sample: int, out_path: str, min_text_chars: int, concurrency: int
+) -> None:
+    asyncio.run(run(csv_path, sample, Path(out_path), min_text_chars, concurrency))
 
 
 if __name__ == "__main__":

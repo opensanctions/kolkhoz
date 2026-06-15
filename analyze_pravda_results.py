@@ -3,7 +3,6 @@
 import asyncio
 import csv
 from collections import defaultdict
-from pathlib import Path
 
 import click
 import httpx
@@ -11,10 +10,6 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
-
-PRAVDA_URL = os.environ["PRAVDA_URL"]
-DEFAULT_CSV = Path.home() / "Documents" / "hio_leadership.csv"
-CONCURRENCY = 10
 
 
 def load_urls(path: str) -> list[str]:
@@ -27,18 +22,20 @@ def load_urls(path: str) -> list[str]:
 
 async def check_snapshot(client: httpx.AsyncClient, url: str) -> dict:
     try:
-        resp = await client.get(f"{PRAVDA_URL}/snapshots", params={"url": url})
+        resp = await client.get(
+            f"{os.environ['PRAVDA_URL']}/snapshots", params={"url": url}
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
         return {"error": str(e), "items": [], "total": 0}
 
 
-async def run(csv_path: str) -> None:
+async def run(csv_path: str, concurrency: int) -> None:
     urls = load_urls(csv_path)
     print(f"Loaded {len(urls)} unique URLs from {csv_path}\n")
 
-    sem = asyncio.Semaphore(CONCURRENCY)
+    sem = asyncio.Semaphore(concurrency)
 
     async def limited_check(client: httpx.AsyncClient, url: str) -> dict:
         async with sem:
@@ -124,9 +121,12 @@ async def run(csv_path: str) -> None:
 
 
 @click.command(help=__doc__)
-@click.argument("csv_path", type=click.Path(exists=True), default=str(DEFAULT_CSV))
-def main(csv_path: str) -> None:
-    asyncio.run(run(csv_path))
+@click.argument("csv_path", type=click.Path(exists=True))
+@click.option(
+    "-c", "--concurrency", type=int, default=10, help="Max concurrent Pravda requests."
+)
+def main(csv_path: str, concurrency: int) -> None:
+    asyncio.run(run(csv_path, concurrency))
 
 
 if __name__ == "__main__":

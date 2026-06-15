@@ -2,13 +2,10 @@
 
 import asyncio
 import csv
-from pathlib import Path
 
 import click
 
 from snapshot_url import async_snapshot_url, format_snapshot
-
-DEFAULT_CSV = Path.home() / "Documents" / "hio_leadership.csv"
 
 
 def load_urls(path: str) -> list[str]:
@@ -37,7 +34,7 @@ async def run(csv_path: str, concurrency: int) -> None:
 
 
 @click.command(help=__doc__)
-@click.argument("csv_path", type=click.Path(exists=True), default=str(DEFAULT_CSV))
+@click.argument("csv_path", type=click.Path(exists=True))
 @click.option(
     "-c",
     "--concurrency",

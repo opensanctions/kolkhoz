@@ -2,8 +2,6 @@ import json
 import os
 from pathlib import Path
 
-from kolkhoz.extract import PROMPT_VERSION
-
 RESULT_FIELDS = ("status", "reason", "holders", "usage")
 
 
@@ -22,11 +20,9 @@ def write_jsonl(path: Path, records) -> None:
 
 
 def build_content_cache(records: list[dict]) -> dict[str, dict]:
-    """Seed a text-hash cache from prior results, filtering by current model/prompt."""
+    """Seed a text-hash cache from prior results, filtering by current model."""
     return {
         record["text_hash"]: {field: record[field] for field in RESULT_FIELDS}
         for record in records
-        if record.get("text_hash")
-        and record.get("model") == os.environ["OPENAI_MODEL"]
-        and record.get("prompt_version") == PROMPT_VERSION
+        if record.get("text_hash") and record.get("model") == os.environ["OPENAI_MODEL"]
     }

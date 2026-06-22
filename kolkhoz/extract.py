@@ -4,9 +4,6 @@ Tier 1 feeds the rendered page text. Tier 2 retries tier-1 misses with the
 full-page screenshot on its own (tier 1 already failed on the text, so the
 text isn't re-sent). Both use strict structured outputs, a cached static prompt
 prefix (the instructions), and low reasoning effort.
-
-Bump PROMPT_VERSION whenever the instructions, schema, or model change — it is
-part of the cache key, so stale extractions get re-run.
 """
 
 import base64
@@ -17,7 +14,6 @@ from pydantic import BaseModel, Field
 
 client = AsyncOpenAI()
 
-PROMPT_VERSION = "v3"
 REASONING_EFFORT = "low"
 
 INSTRUCTIONS = """\

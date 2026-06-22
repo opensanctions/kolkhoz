@@ -17,7 +17,6 @@ from pathlib import Path
 import httpx
 
 from kolkhoz import pravda
-from kolkhoz.extract import PROMPT_VERSION
 from kolkhoz.utils import build_content_cache, read_jsonl, write_jsonl
 
 log = logging.getLogger(__name__)
@@ -45,7 +44,6 @@ async def process_url(
             "snapshot_id": snapshot["id"],
             "text_hash": text_hash,
             "model": os.environ["OPENAI_MODEL"],
-            "prompt_version": PROMPT_VERSION,
         }
 
         missing = requires(snapshot)

@@ -6,7 +6,7 @@ Reads snapshots from data/tier0.jsonl. Results land in two files:
   - data/tier1_misses.jsonl: misses with full snapshot data, for tier 2.
 
 Each hit record:
-  {url, snapshot_id, text_hash, model, prompt_version,
+  {url, snapshot_id, text_hash, model,
    holders: [{human, position}], usage}
 
 Each miss record:

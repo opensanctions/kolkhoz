@@ -5,11 +5,13 @@ Pravda's content-addressed storage (the API returns file paths; we read them
 directly, as Pravda intends).
 """
 
+import io
 import os
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
+from PIL import Image
 
 load_dotenv()
 
@@ -52,3 +54,13 @@ def read_text(item: dict | None) -> str:
     if item is None:
         return ""
     return read_blob(item["path"]).decode("utf-8", errors="replace")
+
+
+def is_blank(blob: bytes) -> bool:
+    """True if the image is a single solid colour (a blank or failed render).
+
+    ``getcolors(1)`` returns a list iff the image has at most one distinct
+    colour, else None — so a blank white/black/any-colour page reads as blank.
+    """
+    image = Image.open(io.BytesIO(blob))
+    return image.getcolors(1) is not None

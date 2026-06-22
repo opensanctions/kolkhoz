@@ -8,6 +8,7 @@ dependencies = [
     "click>=8.4.1",
     "httpx>=0.28.1",
     "openai>=2.41.1",
+    "pillow>=12.2.0",
     "python-dotenv>=1.2.2",
 ]
 

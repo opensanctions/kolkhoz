@@ -1,9 +1,10 @@
-"""Tier 2 extraction: for the pages tier 1 missed, re-run with the full-page
-screenshot added to the text.
+"""Tier 2 extraction: fallback for pages tier 1 missed, adding the full-page
+screenshot to the text.
 
 Reads misses from data/tier1_misses.jsonl (produced by tier 1). The screenshot
-catches names that the rendered text didn't carry (JS shells, text baked into
-images). Results land in data/tier2.jsonl.
+catches names the rendered text didn't carry (JS shells, text baked into
+images). Pages with no screenshot, or a blank one, are skipped. Results land
+in data/tier2.jsonl.
 """
 
 import asyncio
@@ -21,7 +22,12 @@ log = logging.getLogger(__name__)
 
 
 def requires(snapshot: dict) -> str | None:
-    return None if pravda.content(snapshot, pravda.SCREENSHOT) else "no_screenshot"
+    item = pravda.content(snapshot, pravda.SCREENSHOT)
+    if not item:
+        return "no_screenshot"
+    if pravda.is_blank(pravda.read_blob(item["path"])):
+        return "blank_screenshot"
+    return None
 
 
 async def extract(snapshot: dict) -> dict:

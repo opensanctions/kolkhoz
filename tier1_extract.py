@@ -1,7 +1,7 @@
-"""Tier 1 extraction: feed each URL's latest Pravda snapshot text to the LLM
-and record the position holders it finds.
+"""Tier 1 extraction: feed non-empty snapshot text to the LLM and record the
+position holders it finds.
 
-Reads URLs from data/tier0.jsonl (pass-only). Results land in two files:
+Reads snapshots from data/tier0.jsonl. Results land in two files:
   - data/tier1.jsonl: hits (extracted holders). Also serves as the cache.
   - data/tier1_misses.jsonl: misses with full snapshot data, for tier 2.
 
@@ -28,7 +28,8 @@ log = logging.getLogger(__name__)
 
 
 def requires(snapshot: dict) -> str | None:
-    return None if pravda.content(snapshot, pravda.TEXT) else "no_text"
+    text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
+    return None if text.strip() else "no_text"
 
 
 async def extract(snapshot: dict) -> dict:

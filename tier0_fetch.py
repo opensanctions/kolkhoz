@@ -1,7 +1,8 @@
-"""Tier 0 filter: keep only URLs whose latest Pravda snapshot has enough text.
+"""Tier 0 fetch: cache the latest Pravda snapshot for each URL.
 
 Reads a CSV of URLs, fetches the latest Pravda snapshot for each, and writes
-those with enough text content to data/tier0.jsonl. No LLM calls.
+the snapshots to data/tier0.jsonl. No filtering, no LLM calls — this is just a
+snapshot cache so extraction tiers can be re-run without re-hitting Pravda.
 
 The output file doubles as cache: a URL already present is reused without a
 new lookup.
@@ -31,22 +32,11 @@ async def fetch_snapshot(
     client: httpx.AsyncClient,
     url: str,
     sem: asyncio.Semaphore,
-    min_text_chars: int,
 ) -> dict | None:
     async with sem:
         snapshot = await pravda.latest_snapshot(client, url)
         if snapshot is None:
             print(f"  skip {url} — no snapshot")
-            return None
-
-        text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
-        if not text or len(text.strip()) < min_text_chars:
-            preview = (text or "").strip()
-            print(
-                f"  skip {url} — text too short ({len(text.strip()) if text else 0} chars)"
-            )
-            if preview:
-                print(f"    {preview}")
             return None
 
         return {
@@ -57,9 +47,7 @@ async def fetch_snapshot(
         }
 
 
-async def run(
-    csv_path: str, sample: int, out_path: Path, min_text_chars: int, concurrency: int
-) -> None:
+async def run(csv_path: str, sample: int, out_path: Path, concurrency: int) -> None:
     by_url = {r["url"]: r for r in read_jsonl(out_path)}
 
     urls = load_urls(csv_path)
@@ -69,11 +57,12 @@ async def run(
     new_urls = [u for u in urls if u not in by_url]
     print(f"Processing {len(urls)} URL(s) ({len(new_urls)} new)")
 
+    results: list[dict | None] = []
     if new_urls:
         sem = asyncio.Semaphore(concurrency)
         async with httpx.AsyncClient(timeout=30) as client:
             results = await asyncio.gather(
-                *[fetch_snapshot(client, url, sem, min_text_chars) for url in new_urls]
+                *[fetch_snapshot(client, url, sem) for url in new_urls]
             )
         for record in results:
             if record is not None:
@@ -95,18 +84,10 @@ async def run(
     help="Output JSONL path.",
 )
 @click.option(
-    "--min-text-chars",
-    type=int,
-    default=200,
-    help="Minimum text characters to keep a snapshot.",
-)
-@click.option(
     "-c", "--concurrency", type=int, default=10, help="Max concurrent Pravda requests."
 )
-def main(
-    csv_path: str, sample: int, out_path: str, min_text_chars: int, concurrency: int
-) -> None:
-    asyncio.run(run(csv_path, sample, Path(out_path), min_text_chars, concurrency))
+def main(csv_path: str, sample: int, out_path: str, concurrency: int) -> None:
+    asyncio.run(run(csv_path, sample, Path(out_path), concurrency))
 
 
 if __name__ == "__main__":

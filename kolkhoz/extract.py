@@ -92,11 +92,26 @@ async def extract_from_image(screenshot: bytes) -> tuple[Extraction, dict]:
     tiles = pravda.split_image(screenshot, tile, overlap)
     log.info("tiled screenshot into %d piece(s)", len(tiles))
 
+    # Tell the model the images are tiles of one screenshot, not separate
+    # pages: tiles overlap, so the same person/position may recur.
     content = [
         {
-            "type": "input_image",
-            "image_url": "data:image/png;base64," + base64.b64encode(piece).decode(),
-        }
-        for piece in tiles
+            "type": "input_text",
+            "text": (
+                f"The following {len(tiles)} image(s) are overlapping tiles of a "
+                "single full-page screenshot of one web page, split to fit the "
+                "size limit. Read them together as one page. Tiles overlap, so "
+                "the same person or position may appear in more than one tile — "
+                "extract each holder once."
+            ),
+        },
+        *[
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,"
+                + base64.b64encode(piece).decode(),
+            }
+            for piece in tiles
+        ],
     ]
     return await _parse(content)

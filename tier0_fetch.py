@@ -48,11 +48,13 @@ async def fetch_snapshot(
         }
 
 
-async def run(csv_path: str, sample: int, out_path: Path, concurrency: int) -> None:
+async def run(
+    csv_path: str, sample: int | None, out_path: Path, concurrency: int
+) -> None:
     by_url = {r["url"]: r for r in read_jsonl(out_path)}
 
     urls = load_urls(csv_path)
-    if sample < len(urls):
+    if sample is not None and sample < len(urls):
         urls = random.sample(urls, sample)
 
     new_urls = [u for u in urls if u not in by_url]
@@ -76,7 +78,7 @@ async def run(csv_path: str, sample: int, out_path: Path, concurrency: int) -> N
 
 @click.command(help=__doc__)
 @click.argument("csv_path", type=click.Path(exists=True))
-@click.option("-n", "--sample", type=int, default=20, help="Randomly sample N URLs.")
+@click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
 @click.option(
     "-o",
     "--out-path",
@@ -87,7 +89,7 @@ async def run(csv_path: str, sample: int, out_path: Path, concurrency: int) -> N
 @click.option(
     "-c", "--concurrency", type=int, default=10, help="Max concurrent Pravda requests."
 )
-def main(csv_path: str, sample: int, out_path: str, concurrency: int) -> None:
+def main(csv_path: str, sample: int | None, out_path: str, concurrency: int) -> None:
     asyncio.run(run(csv_path, sample, Path(out_path), concurrency))
 
 

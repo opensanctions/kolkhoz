@@ -4,8 +4,10 @@ screenshot on its own.
 Reads misses from data/tier1_misses.jsonl (produced by tier 1). Tier 1 already
 failed on the text, so tier 2 retries with eyes only — the screenshot catches
 names the rendered text didn't carry (JS shells, text baked into images).
-Records with no screenshot, or a blank one, are skipped. Results land in
-data/tier2.jsonl, layered on top of the tier-0 record.
+Records with no screenshot, or a blank one, are skipped. Results land in two
+files:
+  - data/tier2.jsonl: every record (rescued + misses), layered on tier 0.
+  - data/tier2_misses.jsonl: the input records tier 2 also missed.
 """
 
 import asyncio
@@ -17,7 +19,7 @@ import click
 from kolkhoz import pravda
 from kolkhoz.extract import extract_from_image
 from kolkhoz.pipeline import run_batch
-from kolkhoz.utils import read_jsonl
+from kolkhoz.utils import read_jsonl, write_jsonl
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +41,15 @@ async def extract(record: dict) -> dict:
     return {"status": status, "reason": reason, "holders": holders, "usage": usage}
 
 
-async def run(misses_path: Path, out_path: Path, concurrency: int) -> None:
+async def run(
+    misses_path: Path, out_path: Path, out_misses_path: Path, concurrency: int
+) -> None:
     misses = read_jsonl(misses_path)
     log.info("%d tier-1 miss(es) to retry with screenshot", len(misses))
     if not misses:
         return
 
+    misses_by_url = {r["url"]: r for r in misses}
     results = await run_batch(
         misses,
         out_path,
@@ -53,9 +58,20 @@ async def run(misses_path: Path, out_path: Path, concurrency: int) -> None:
         concurrency=concurrency,
     )
 
-    rescued = sum(1 for record in results if record["status"] == "hit")
-    still_miss = len(results) - rescued
-    log.info("%d rescued, %d still miss → %s", rescued, still_miss, out_path)
+    rescued = [record for record in results if record["status"] == "hit"]
+    still_miss = [record for record in results if record["status"] == "miss"]
+    log.info("%d rescued, %d still miss → %s", len(rescued), len(still_miss), out_path)
+
+    # Keep the records tier 2 also missed, for later inspection.
+    if still_miss:
+        miss_records = [misses_by_url[r["url"]] for r in still_miss]
+        write_jsonl(out_misses_path, miss_records)
+        log.info("Wrote %d miss(es) → %s", len(miss_records), out_misses_path)
+    reasons: dict[str, int] = {}
+    for record in still_miss:
+        reasons[record["reason"]] = reasons.get(record["reason"], 0) + 1
+    for reason, count in sorted(reasons.items()):
+        log.info("  miss/%s: %d", reason, count)
 
 
 @click.command(help=__doc__)
@@ -74,14 +90,25 @@ async def run(misses_path: Path, out_path: Path, concurrency: int) -> None:
     help="Output JSONL path.",
 )
 @click.option(
+    "-m",
+    "--out-misses-path",
+    type=click.Path(),
+    default="data/tier2_misses.jsonl",
+    help="Misses output JSONL path.",
+)
+@click.option(
     "-c", "--concurrency", type=int, default=3, help="Max concurrent LLM requests."
 )
-def main(misses_path: str, out_path: str, concurrency: int) -> None:
+def main(
+    misses_path: str, out_path: str, out_misses_path: str, concurrency: int
+) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
-    asyncio.run(run(Path(misses_path), Path(out_path), concurrency))
+    asyncio.run(
+        run(Path(misses_path), Path(out_path), Path(out_misses_path), concurrency)
+    )
 
 
 if __name__ == "__main__":

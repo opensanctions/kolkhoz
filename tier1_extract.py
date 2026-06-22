@@ -1,16 +1,13 @@
 """Tier 1 extraction: feed non-empty snapshot text to the LLM and record the
 position holders it finds.
 
-Reads snapshots from data/tier0.jsonl. Results land in two files:
-  - data/tier1.jsonl: hits (extracted holders). Also serves as the cache.
-  - data/tier1_misses.jsonl: misses with full snapshot data, for tier 2.
+Reads records from data/tier0.jsonl. Results land in two files:
+  - data/tier1.jsonl: every record (hits + misses), layered on top of tier 0.
+  - data/tier1_misses.jsonl: the tier-0 records that missed, for tier 2.
 
-Each hit record:
-  {url, snapshot_id, text_hash, model,
-   holders: [{human, position}], usage}
-
-Each miss record:
-  {url, snapshot_id, snapshot}
+Each record:
+  {url, snapshot_id, captured_at, plaintext, screenshot,
+   model, status, reason, holders, usage}
 """
 
 import asyncio
@@ -27,13 +24,13 @@ from kolkhoz.utils import read_jsonl, write_jsonl
 log = logging.getLogger(__name__)
 
 
-def requires(snapshot: dict) -> str | None:
-    text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
+def requires(record: dict) -> str | None:
+    text = pravda.read_text(record.get("plaintext"))
     return None if text.strip() else "no_text"
 
 
-async def extract(snapshot: dict) -> dict:
-    text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
+async def extract(record: dict) -> dict:
+    text = pravda.read_text(record.get("plaintext"))
     extraction, usage = await extract_from_text(text)
     holders = [holder.model_dump() for holder in extraction.holders]
     status = "hit" if holders else "miss"
@@ -49,31 +46,22 @@ async def run(
     if not tier0:
         return
 
-    snapshot_by_url = {r["url"]: r["snapshot"] for r in tier0}
+    tier0_by_url = {r["url"]: r for r in tier0}
     results = await run_batch(
-        [record["url"] for record in tier0],
+        tier0,
         out_path,
         requires=requires,
         extract=extract,
         concurrency=concurrency,
-        timeout=60,
-        snapshot_by_url=snapshot_by_url,
     )
 
     hits = [record for record in results if record["status"] == "hit"]
     misses = [record for record in results if record["status"] == "miss"]
     log.info("%d hit, %d miss → %s", len(hits), len(misses), out_path)
 
-    # Write misses with snapshot data for tier 2
+    # Pass the tier-0 records for misses on to tier 2 (eyes-only retry).
     if misses:
-        miss_records = [
-            {
-                "url": r["url"],
-                "snapshot_id": r["snapshot_id"],
-                "snapshot": snapshot_by_url[r["url"]],
-            }
-            for r in misses
-        ]
+        miss_records = [tier0_by_url[r["url"]] for r in misses]
         write_jsonl(misses_path, miss_records)
         log.info("Wrote %d miss(es) → %s", len(miss_records), misses_path)
     reasons: dict[str, int] = {}

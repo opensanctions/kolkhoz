@@ -42,8 +42,9 @@ async def fetch_snapshot(
         return {
             "url": url,
             "snapshot_id": snapshot["id"],
-            "text_hash": pravda.content_hash(snapshot, pravda.TEXT),
-            "snapshot": snapshot,
+            "captured_at": snapshot["captured_at"],
+            "plaintext": snapshot.get("plaintext"),
+            "screenshot": snapshot.get("screenshot"),
         }
 
 

@@ -4,8 +4,8 @@ screenshot on its own.
 Reads misses from data/tier1_misses.jsonl (produced by tier 1). Tier 1 already
 failed on the text, so tier 2 retries with eyes only — the screenshot catches
 names the rendered text didn't carry (JS shells, text baked into images).
-Pages with no screenshot, or a blank one, are skipped. Results land
-in data/tier2.jsonl.
+Records with no screenshot, or a blank one, are skipped. Results land in
+data/tier2.jsonl, layered on top of the tier-0 record.
 """
 
 import asyncio
@@ -22,17 +22,17 @@ from kolkhoz.utils import read_jsonl
 log = logging.getLogger(__name__)
 
 
-def requires(snapshot: dict) -> str | None:
-    item = pravda.content(snapshot, pravda.SCREENSHOT)
-    if not item:
+def requires(record: dict) -> str | None:
+    path = record.get("screenshot")
+    if not path:
         return "no_screenshot"
-    if pravda.is_blank(pravda.read_blob(item["path"])):
+    if pravda.is_blank(pravda.read_blob(path)):
         return "blank_screenshot"
     return None
 
 
-async def extract(snapshot: dict) -> dict:
-    screenshot = pravda.read_blob(pravda.content(snapshot, pravda.SCREENSHOT)["path"])
+async def extract(record: dict) -> dict:
+    screenshot = pravda.read_blob(record["screenshot"])
     extraction, usage = await extract_from_image(screenshot)
     holders = [holder.model_dump() for holder in extraction.holders]
     status, reason = ("hit", None) if holders else ("miss", "no_holders")
@@ -46,13 +46,11 @@ async def run(misses_path: Path, out_path: Path, concurrency: int) -> None:
         return
 
     results = await run_batch(
-        [record["url"] for record in misses],
+        misses,
         out_path,
         requires=requires,
         extract=extract,
         concurrency=concurrency,
-        timeout=120,
-        snapshot_by_url={r["url"]: r["snapshot"] for r in misses},
     )
 
     rescued = sum(1 for record in results if record["status"] == "hit")

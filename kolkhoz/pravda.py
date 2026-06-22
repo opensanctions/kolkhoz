@@ -15,10 +15,6 @@ from PIL import Image
 
 load_dotenv()
 
-# Content types Pravda captures, by their MIME type.
-TEXT = "text/plain"  # inner_text("body") — the rendered, tag-stripped page text
-SCREENSHOT = "image/png"  # full-page screenshot
-
 
 async def latest_snapshot(client: httpx.AsyncClient, url: str) -> dict | None:
     """Return the most recent snapshot for *url*, or None if there are none."""
@@ -30,30 +26,16 @@ async def latest_snapshot(client: httpx.AsyncClient, url: str) -> dict | None:
     return items[0] if items else None  # the API returns newest first
 
 
-def content(snapshot: dict, content_type: str) -> dict | None:
-    """The captured artifact of *content_type* in *snapshot*, if present."""
-    for item in snapshot.get("contents", []):
-        if item["content_type"] == content_type:
-            return item
-    return None
-
-
-def content_hash(snapshot: dict, content_type: str) -> str | None:
-    """The CAS hash of an artifact — the basename of its stored path."""
-    item = content(snapshot, content_type)
-    return Path(item["path"]).name if item else None
-
-
 def read_blob(path: str) -> bytes:
     """Read a Pravda blob directly from shared storage."""
     return Path(path).read_bytes()
 
 
-def read_text(item: dict | None) -> str:
-    """Decode a text artifact, or "" if it is absent."""
-    if item is None:
+def read_text(path: str | None) -> str:
+    """Decode the plaintext blob at *path*, or "" if none was captured."""
+    if not path:
         return ""
-    return read_blob(item["path"]).decode("utf-8", errors="replace")
+    return read_blob(path).decode("utf-8", errors="replace")
 
 
 def is_blank(blob: bytes) -> bool:

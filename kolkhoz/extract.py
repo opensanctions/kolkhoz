@@ -2,15 +2,20 @@
 
 Tier 1 feeds the rendered page text. Tier 2 retries tier-1 misses with the
 full-page screenshot on its own (tier 1 already failed on the text, so the
-text isn't re-sent). Both use strict structured outputs, a cached static prompt
-prefix (the instructions), and low reasoning effort.
+text isn't re-sent), tiled into overlapping squares so the model never has to
+rescale a page larger than its image cap. Both use strict structured outputs,
+a cached static prompt prefix (the instructions), and low reasoning effort.
 """
 
 import base64
+import logging
 import os
 
+from kolkhoz import pravda
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+
+log = logging.getLogger(__name__)
 
 client = AsyncOpenAI()
 
@@ -77,6 +82,29 @@ async def extract_from_text(text: str) -> tuple[Extraction, dict]:
 
 
 async def extract_from_image(screenshot: bytes) -> tuple[Extraction, dict]:
-    """Tier 2: extract holders from the full-page screenshot alone."""
-    data_url = "data:image/png;base64," + base64.b64encode(screenshot).decode()
-    return await _parse([{"type": "input_image", "image_url": data_url}])
+    """Tier 2: extract holders from the full-page screenshot alone.
+
+    The screenshot is tiled into overlapping squares under the model's image
+    cap; each tile is parsed and the holders merged (duplicates dropped).
+    """
+    tile = int(os.environ["IMAGE_TILE_SIZE"])
+    overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
+    tiles = pravda.split_image(screenshot, tile, overlap)
+    log.info("tiled screenshot into %d piece(s)", len(tiles))
+
+    holders: list[Holder] = []
+    seen: set[tuple[str, str]] = set()
+    usage_total = {"input_tokens": 0, "output_tokens": 0}
+    for piece in tiles:
+        data_url = "data:image/png;base64," + base64.b64encode(piece).decode()
+        extraction, usage = await _parse(
+            [{"type": "input_image", "image_url": data_url}]
+        )
+        usage_total["input_tokens"] += usage["input_tokens"]
+        usage_total["output_tokens"] += usage["output_tokens"]
+        for holder in extraction.holders:
+            key = (holder.human, holder.position)
+            if key not in seen:
+                seen.add(key)
+                holders.append(holder)
+    return Extraction(holders=holders), usage_total

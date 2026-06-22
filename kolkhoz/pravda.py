@@ -46,3 +46,36 @@ def is_blank(blob: bytes) -> bool:
     """
     image = Image.open(io.BytesIO(blob))
     return image.getcolors(1) is not None
+
+
+def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
+    """Tile an image into *overlap*-fraction overlapping *tile*-px squares.
+
+    Full *tile*-px squares are laid out on a stride of ``tile * (1 - overlap)``;
+    whatever falls off the end is emitted as a single narrower remainder tile
+    (e.g. a 5000px axis at tile 2048 yields two 2048px tiles + one 904px tile).
+    Images that fit inside *tile* in both dimensions come back as a single tile.
+    """
+    image = Image.open(io.BytesIO(blob))
+    width, height = image.size
+
+    def spans(size: int) -> list[tuple[int, int]]:
+        if size <= tile:
+            return [(0, size)]
+        stride = round(tile * (1 - overlap))
+        result: list[tuple[int, int]] = []
+        start = 0
+        while start + tile <= size:
+            result.append((start, start + tile))
+            start += stride
+        if start < size:
+            result.append((start, size))
+        return result
+
+    tiles: list[bytes] = []
+    for left, right in spans(width):
+        for top, bottom in spans(height):
+            buf = io.BytesIO()
+            image.crop((left, top, right, bottom)).save(buf, format="PNG")
+            tiles.append(buf.getvalue())
+    return tiles

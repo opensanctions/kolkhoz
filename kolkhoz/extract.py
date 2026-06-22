@@ -85,26 +85,18 @@ async def extract_from_image(screenshot: bytes) -> tuple[Extraction, dict]:
     """Tier 2: extract holders from the full-page screenshot alone.
 
     The screenshot is tiled into overlapping squares under the model's image
-    cap; each tile is parsed and the holders merged (duplicates dropped).
+    cap; all tiles are sent in a single request.
     """
     tile = int(os.environ["IMAGE_TILE_SIZE"])
     overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
     tiles = pravda.split_image(screenshot, tile, overlap)
     log.info("tiled screenshot into %d piece(s)", len(tiles))
 
-    holders: list[Holder] = []
-    seen: set[tuple[str, str]] = set()
-    usage_total = {"input_tokens": 0, "output_tokens": 0}
-    for piece in tiles:
-        data_url = "data:image/png;base64," + base64.b64encode(piece).decode()
-        extraction, usage = await _parse(
-            [{"type": "input_image", "image_url": data_url}]
-        )
-        usage_total["input_tokens"] += usage["input_tokens"]
-        usage_total["output_tokens"] += usage["output_tokens"]
-        for holder in extraction.holders:
-            key = (holder.human, holder.position)
-            if key not in seen:
-                seen.add(key)
-                holders.append(holder)
-    return Extraction(holders=holders), usage_total
+    content = [
+        {
+            "type": "input_image",
+            "image_url": "data:image/png;base64," + base64.b64encode(piece).decode(),
+        }
+        for piece in tiles
+    ]
+    return await _parse(content)

@@ -1,9 +1,10 @@
-"""Tier 2 extraction: fallback for pages tier 1 missed, adding the full-page
-screenshot to the text.
+"""Tier 2 extraction: fallback for pages tier 1 missed, using the full-page
+screenshot on its own.
 
-Reads misses from data/tier1_misses.jsonl (produced by tier 1). The screenshot
-catches names the rendered text didn't carry (JS shells, text baked into
-images). Pages with no screenshot, or a blank one, are skipped. Results land
+Reads misses from data/tier1_misses.jsonl (produced by tier 1). Tier 1 already
+failed on the text, so tier 2 retries with eyes only — the screenshot catches
+names the rendered text didn't carry (JS shells, text baked into images).
+Pages with no screenshot, or a blank one, are skipped. Results land
 in data/tier2.jsonl.
 """
 
@@ -14,7 +15,7 @@ from pathlib import Path
 import click
 
 from kolkhoz import pravda
-from kolkhoz.extract import extract_from_text_and_image
+from kolkhoz.extract import extract_from_image
 from kolkhoz.pipeline import run_batch
 from kolkhoz.utils import read_jsonl
 
@@ -31,9 +32,8 @@ def requires(snapshot: dict) -> str | None:
 
 
 async def extract(snapshot: dict) -> dict:
-    text = pravda.read_text(pravda.content(snapshot, pravda.TEXT))
     screenshot = pravda.read_blob(pravda.content(snapshot, pravda.SCREENSHOT)["path"])
-    extraction, usage = await extract_from_text_and_image(text, screenshot)
+    extraction, usage = await extract_from_image(screenshot)
     holders = [holder.model_dump() for holder in extraction.holders]
     status, reason = ("hit", None) if holders else ("miss", "no_holders")
     return {"status": status, "reason": reason, "holders": holders, "usage": usage}

@@ -1,7 +1,8 @@
 """Extract political position holders from a page via the OpenAI API.
 
-Tier 1 feeds the rendered page text. Tier 2 adds the full-page screenshot for
-pages tier 1 missed. Both use strict structured outputs, a cached static prompt
+Tier 1 feeds the rendered page text. Tier 2 retries tier-1 misses with the
+full-page screenshot on its own (tier 1 already failed on the text, so the
+text isn't re-sent). Both use strict structured outputs, a cached static prompt
 prefix (the instructions), and low reasoning effort.
 
 Bump PROMPT_VERSION whenever the instructions, schema, or model change — it is
@@ -16,11 +17,11 @@ from pydantic import BaseModel, Field
 
 client = AsyncOpenAI()
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 REASONING_EFFORT = "low"
 
 INSTRUCTIONS = """\
-You extract political position holders from the text of a single web page.
+You extract political position holders from the content of a single web page.
 
 A "holder" is a specific, named human who holds a named position (office, seat,
 title, or role) at the organisation the page is about — e.g. a council member,
@@ -79,14 +80,7 @@ async def extract_from_text(text: str) -> tuple[Extraction, dict]:
     return await _parse([{"type": "input_text", "text": text}])
 
 
-async def extract_from_text_and_image(
-    text: str, screenshot: bytes
-) -> tuple[Extraction, dict]:
-    """Tier 2: extract holders from the page text plus its screenshot."""
+async def extract_from_image(screenshot: bytes) -> tuple[Extraction, dict]:
+    """Tier 2: extract holders from the full-page screenshot alone."""
     data_url = "data:image/png;base64," + base64.b64encode(screenshot).decode()
-    return await _parse(
-        [
-            {"type": "input_text", "text": text},
-            {"type": "input_image", "image_url": data_url},
-        ]
-    )
+    return await _parse([{"type": "input_image", "image_url": data_url}])

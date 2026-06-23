@@ -196,18 +196,11 @@ def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[
 
     Always sends *text*. The model may pull the *screenshot* via the
     ``get_screenshot`` tool.
-
-    Returns (extraction, provenance) where provenance is the full dump of
-    every model response, one per round (id, model, token usage, reasoning,
-    function calls, and the final parsed answer all live in there). Whether
-    the model pulled the screenshot is recoverable from the function_call
-    items in those dumps.
     """
     tile = int(os.environ["IMAGE_TILE_SIZE"])
     overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
 
     input_items = [{"role": "user", "content": [{"type": "input_text", "text": text}]}]
-    provenance: list[dict] = []
 
     for _ in range(MAX_ROUNDS):
         response = client.responses.parse(
@@ -218,7 +211,6 @@ def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[
             text_format=Extraction,
             reasoning={"effort": REASONING_EFFORT},
         )
-        provenance.append(response.model_dump(mode="json"))
 
         # Does the model want the screenshot?
         tool_calls = [
@@ -232,7 +224,7 @@ def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[
                 raise ValueError(
                     f"Model returned no parsed output (possible refusal): {response.output}"
                 )
-            return response.output_parsed, provenance
+            return response.output_parsed
 
         # It asked for the screenshot. Append the assistant's call(s) + our
         # tool result, loop again.
@@ -372,27 +364,16 @@ def extract_one(client: httpx.Client, row: InputRow) -> dict | None:
         screenshot_blob = None
 
     log.info("%s → extracting …", snapshot["url"])
-    extraction, provenance = extract(text, screenshot_blob)
+    extraction = extract(text, screenshot_blob)
     holders = [holder.model_dump() for holder in extraction.holders]
     for holder in holders:
         if holder["position"] is None:
             holder["position"] = row.position
-    status = "hit" if holders else "miss"
-    reason = None if holders else "no_holders"
-
     out.update(
-        status=status,
-        reason=reason,
         page_type=extraction.page_type.value,
         holders=holders,
-        provenance=provenance,
     )
-    log.info(
-        "%s → %s (%d holder(s))",
-        snapshot["url"],
-        status,
-        len(holders),
-    )
+    log.info("%s → %d holder(s)", snapshot["url"], len(holders))
     return out
 
 
@@ -456,9 +437,9 @@ def extract_cmd(csv_path: str, sample: int | None) -> None:
     write_jsonl(out_path, results)
     log.info("wrote %d record(s) → %s", len(results), out_path)
 
-    hits = [r for r in results if r["status"] == "hit"]
-    misses = [r for r in results if r["status"] == "miss"]
-    log.info("extraction: %d hit, %d miss", len(hits), len(misses))
+    hits = sum(1 for r in results if r["holders"])
+    misses = len(results) - hits
+    log.info("extraction: %d hit, %d miss", hits, misses)
 
     # Page-type distribution
     pt_counts: dict[str, int] = {}
@@ -472,13 +453,6 @@ def extract_cmd(csv_path: str, sample: int | None) -> None:
         pt_counts.get("profile", 0),
         pt_counts.get("other", 0),
     )
-
-    # Miss reason breakdown
-    reasons: dict[str, int] = {}
-    for r in misses:
-        reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
-    for reason, count in sorted(reasons.items()):
-        log.info("  miss/%s: %d", reason, count)
 
 
 if __name__ == "__main__":

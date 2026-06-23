@@ -28,7 +28,7 @@ uv sync
 # Snapshot a single URL
 uv run python scripts/snapshot_url.py https://example.org
 
-# Snapshot all pep_urls from a CSV
+# Snapshot all URLs from a CSV
 uv run python scripts/snapshot_urls_from_csv.py data/hio_leadership.csv
 
 # Analyze Pravda snapshot results

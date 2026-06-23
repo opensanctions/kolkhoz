@@ -2,9 +2,6 @@
 
 Reads a CSV of URLs, fetches the latest Pravda snapshot for each, runs an
 LLM extraction step, and writes the results to data/extracted.jsonl.
-
-The output file doubles as cache: a URL already present is reused without a
-new Pravda lookup or LLM call.
 """
 
 import asyncio
@@ -50,13 +47,6 @@ async def latest_snapshot(client: httpx.AsyncClient, url: str) -> dict | None:
 def read_blob(path: str) -> bytes:
     """Read a Pravda blob directly from shared storage."""
     return Path(path).read_bytes()
-
-
-def read_text(path: str | None) -> str:
-    """Decode the plaintext blob at *path*, or "" if none was captured."""
-    if not path:
-        return ""
-    return read_blob(path).decode("utf-8", errors="replace")
 
 
 def is_blank(blob: bytes) -> bool:
@@ -168,8 +158,13 @@ class Holder(BaseModel):
     human: str = Field(
         description="Full name of the person, exactly as written on the page."
     )
-    position: str = Field(
-        description="Specific position title the person holds, e.g. 'Council Member'."
+    position: str | None = Field(
+        default=None,
+        description=(
+            "Specific position title the person holds, e.g. 'Council Member'. "
+            "Omit (null) only if the page names the person but states no specific "
+            "title for them."
+        ),
     )
 
 
@@ -272,13 +267,6 @@ async def extract(
 # ---------------------------------------------------------------------------
 
 
-def read_jsonl(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    with path.open() as f:
-        return [json.loads(line) for line in f if line.strip()]
-
-
 def write_jsonl(path: Path, records) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
@@ -286,22 +274,27 @@ def write_jsonl(path: Path, records) -> None:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def load_urls(path: str) -> list[str]:
+class InputRow(BaseModel):
+    """One row of the input CSV: a URL plus its known metadata."""
+
+    institute: str
+    position: str | None  # fallback when the model extracts no position
+    url: str
+
+
+def load_input(path: str) -> list[InputRow]:
+    """Parse the input CSV into typed rows, dropping rows with a blank URL."""
     with open(path) as f:
         reader = csv.DictReader(f)
-        return sorted(
-            {row["pep_url"].strip() for row in reader if row["pep_url"].strip()}
-        )
-
-
-def has_content(record: dict) -> str | None:
-    """Return a miss reason when the page has neither usable text nor screenshot."""
-    text = read_text(record.get("plaintext"))
-    shot_path = record.get("screenshot")
-    screenshot_available = bool(shot_path) and not is_blank(read_blob(shot_path))
-    if not text.strip() and not screenshot_available:
-        return "no_content"
-    return None
+        return [
+            InputRow(
+                institute=row["institute"].strip(),
+                position=row["position"].strip() or None,
+                url=row["url"].strip(),
+            )
+            for row in reader
+            if row["url"].strip()
+        ]
 
 
 async def fetch_snapshot(
@@ -329,46 +322,37 @@ async def run(
     extract_concurrency: int,
 ) -> None:
     # --- Fetch snapshots from Pravda ------------------------------------------
-    by_url = {r["url"]: r for r in read_jsonl(out_path)}
+    inputs = load_input(csv_path)
+    # last row wins if a URL repeats across the input file
+    by_url_input = {row.url: row for row in inputs}
+    urls = sorted(by_url_input)
 
-    urls = load_urls(csv_path)
     if sample is not None and sample < len(urls):
         urls = random.sample(urls, sample)
+    log.info("%d URL(s) to fetch", len(urls))
 
-    new_urls = [u for u in urls if u not in by_url]
-    log.info(
-        "%d URL(s) total, %d already done, %d new",
-        len(urls),
-        len(by_url),
-        len(new_urls),
-    )
-
-    if new_urls:
-        sem = asyncio.Semaphore(fetch_concurrency)
-        async with httpx.AsyncClient(timeout=30) as client:
-            results = await asyncio.gather(
-                *[fetch_snapshot(client, url, sem) for url in new_urls]
-            )
-        kept = sum(1 for r in results if r is not None)
-        for record in results:
-            if record is not None:
-                by_url[record["url"]] = record
-        write_jsonl(out_path, by_url.values())
-        log.info("fetch: %d kept, %d skipped", kept, len(new_urls) - kept)
+    sem = asyncio.Semaphore(fetch_concurrency)
+    async with httpx.AsyncClient(timeout=30) as client:
+        results = await asyncio.gather(
+            *[fetch_snapshot(client, url, sem) for url in urls]
+        )
+    records = [r for r in results if r is not None]
+    log.info("fetch: %d kept, %d skipped", len(records), len(urls) - len(records))
 
     # --- Extract with LLM -----------------------------------------------------
-    pending = [r for r in by_url.values() if "status" not in r]
-    log.info("%d record(s) to extract", len(pending))
+    log.info("%d record(s) to extract", len(records))
 
-    if not pending:
-        return
+    fallback_position = {url: row.position for url, row in by_url_input.items()}
 
     sem = asyncio.Semaphore(extract_concurrency)
-    results = await asyncio.gather(*[extract_one(record, sem) for record in pending])
-    for record in results:
-        by_url[record["url"]] = record
-    write_jsonl(out_path, by_url.values())
-    log.info("wrote %d record(s) → %s", len(by_url), out_path)
+    results = await asyncio.gather(
+        *[
+            extract_one(record, sem, fallback_position.get(record["url"]))
+            for record in records
+        ]
+    )
+    write_jsonl(out_path, results)
+    log.info("wrote %d record(s) → %s", len(results), out_path)
 
     hits = [r for r in results if r["status"] == "hit"]
     misses = [r for r in results if r["status"] == "miss"]
@@ -395,18 +379,17 @@ async def run(
         log.info("  miss/%s: %d", reason, count)
 
 
-async def extract_one(record: dict, sem: asyncio.Semaphore) -> dict:
-    """Extract holders from a single fetched record."""
+async def extract_one(
+    record: dict, sem: asyncio.Semaphore, fallback_position: str | None
+) -> dict:
+    """Extract holders from a single fetched record.
+
+    *fallback_position* fills in any holder whose position the model left blank.
+    """
     async with sem:
         out = {**record, "model": os.environ["OPENAI_MODEL"]}
 
-        missing = has_content(record)
-        if missing is not None:
-            log.info("%s → miss (%s)", record["url"], missing)
-            out.update(status="miss", reason=missing, holders=[], provenance=None)
-            return out
-
-        text = read_text(record.get("plaintext"))
+        text = read_blob(record.get("plaintext")).decode("utf-8", errors="replace")
         shot_path = record.get("screenshot")
         screenshot_blob = read_blob(shot_path) if shot_path else None
         if screenshot_blob is not None and is_blank(screenshot_blob):
@@ -415,6 +398,9 @@ async def extract_one(record: dict, sem: asyncio.Semaphore) -> dict:
         log.info("%s → extracting …", record["url"])
         extraction, provenance = await extract(text, screenshot_blob)
         holders = [holder.model_dump() for holder in extraction.holders]
+        for holder in holders:
+            if holder["position"] is None:
+                holder["position"] = fallback_position
         status = "hit" if holders else "miss"
         reason = None if holders else "no_holders"
 

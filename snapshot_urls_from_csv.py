@@ -1,4 +1,4 @@
-"""Snapshot all pep_urls from a CSV through Pravda."""
+"""Snapshot all URLs from a CSV through Pravda."""
 
 import asyncio
 import csv
@@ -11,7 +11,7 @@ from snapshot_url import async_snapshot_url, format_snapshot
 def load_urls(path: str) -> list[str]:
     with open(path) as f:
         reader = csv.DictReader(f)
-        return sorted({row["pep_url"] for row in reader if row["pep_url"].strip()})
+        return sorted({row["url"] for row in reader if row["url"].strip()})
 
 
 async def run(csv_path: str, concurrency: int) -> None:

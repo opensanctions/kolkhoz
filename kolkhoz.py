@@ -37,22 +37,6 @@ log = logging.getLogger("kolkhoz")
 # ===========================================================================
 
 
-def format_snapshot(data: dict) -> str:
-    lines = []
-    for key in ["id", "url", "captured_at", "http_status", "error"]:
-        if key in data:
-            lines.append(f"  {key}: {data[key]}")
-    if "contents" in data:
-        lines.append("  contents:")
-        for c in data["contents"]:
-            lines.append(f"    {c['path']}: {c['content_type']}")
-    if "headers" in data:
-        lines.append("  headers:")
-        for h in data["headers"]:
-            lines.append(f"    {h['name']}: {h['value']}")
-    return "\n".join(lines)
-
-
 async def async_snapshot_url(url: str) -> dict:
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
@@ -348,9 +332,18 @@ async def fetch_snapshot(
 # ===========================================================================
 
 
-async def run_snapshot_csv(rows: list[InputRow], concurrency: int) -> None:
+async def run_snapshot_url(url: str, out_path: Path) -> None:
+    log.info("snapshotting %s", url)
+    data = await async_snapshot_url(url)
+    write_jsonl(out_path, [data])
+    log.info("wrote 1 snapshot → %s", out_path)
+
+
+async def run_snapshot_csv(
+    rows: list[InputRow], out_path: Path, concurrency: int
+) -> None:
     urls = [row.url for row in rows]
-    print(f"Found {len(urls)} URL(s)")
+    log.info("%d unique URL(s) to snapshot", len(urls))
 
     sem = asyncio.Semaphore(concurrency)
 
@@ -359,9 +352,13 @@ async def run_snapshot_csv(rows: list[InputRow], concurrency: int) -> None:
             return await async_snapshot_url(url)
 
     tasks = [asyncio.create_task(limited_snapshot(url)) for url in urls]
+    results: list[dict] = []
     for task in asyncio.as_completed(tasks):
         data = await task
-        print(format_snapshot(data))
+        results.append(data)
+        log.info("snapshotted %s", data.get("url"))
+    write_jsonl(out_path, results)
+    log.info("wrote %d snapshot(s) → %s", len(results), out_path)
 
 
 async def run_extract(
@@ -468,18 +465,34 @@ async def extract_one(
 
 @click.group(help=__doc__)
 def cli() -> None:
-    pass
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
+    )
 
 
 @cli.command("snapshot-url", help="Snapshot a single URL through Pravda.")
 @click.argument("url")
-def snapshot_url_cmd(url: str) -> None:
-    data = asyncio.run(async_snapshot_url(url))
-    print(format_snapshot(data))
+@click.option(
+    "-o",
+    "--out-path",
+    type=click.Path(),
+    default="data/snapshots.jsonl",
+    help="Output JSONL path.",
+)
+def snapshot_url_cmd(url: str, out_path: str) -> None:
+    asyncio.run(run_snapshot_url(url, Path(out_path)))
 
 
 @cli.command("snapshot-csv", help="Snapshot all URLs from a CSV through Pravda.")
 @click.argument("csv_path", type=click.Path(exists=True))
+@click.option(
+    "-o",
+    "--out-path",
+    type=click.Path(),
+    default="data/snapshots.jsonl",
+    help="Output JSONL path.",
+)
 @click.option(
     "-c",
     "--concurrency",
@@ -487,8 +500,8 @@ def snapshot_url_cmd(url: str) -> None:
     default=5,
     help="Max concurrent requests to Pravda.",
 )
-def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
-    asyncio.run(run_snapshot_csv(load_input(csv_path), concurrency))
+def snapshot_csv_cmd(csv_path: str, out_path: str, concurrency: int) -> None:
+    asyncio.run(run_snapshot_csv(load_input(csv_path), Path(out_path), concurrency))
 
 
 @cli.command(
@@ -520,10 +533,6 @@ def extract_cmd(
     fetch_concurrency: int,
     extract_concurrency: int,
 ) -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
-    )
     asyncio.run(
         run_extract(
             load_input(csv_path),

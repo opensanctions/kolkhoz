@@ -1,12 +1,12 @@
-"""Single agentic extraction stage: feed page text (and optionally the
+"""Single agentic extraction: feed page text (and optionally the
 screenshot via a tool) to the LLM and record the position holders it finds.
 
-Reads records from data/stage0.jsonl. The model always receives the rendered
+Reads records from data/fetched.jsonl. The model always receives the rendered
 page text; if the text is insufficient it can call ``get_screenshot`` to pull
 overlapping tiles of the full-page screenshot. Each record is also classified
 by page type (roster / profile / other).
 
-Output: data/stage1.jsonl — every record layered on stage 0:
+Output: data/extracted.jsonl — every record layered on the fetched snapshot:
   {url, snapshot_id, captured_at, plaintext, screenshot,
    model, status, reason, page_type, holders, looked_at, usage}
 """
@@ -58,14 +58,14 @@ async def extract(record: dict) -> dict:
     }
 
 
-async def run(stage0_path: Path, out_path: Path, concurrency: int) -> None:
-    stage0 = read_jsonl(stage0_path)
-    log.info("%d stage-0 record(s) to extract", len(stage0))
-    if not stage0:
+async def run(fetched_path: Path, out_path: Path, concurrency: int) -> None:
+    records = read_jsonl(fetched_path)
+    log.info("%d fetched record(s) to extract", len(records))
+    if not records:
         return
 
     results = await run_batch(
-        stage0,
+        records,
         out_path,
         requires=requires,
         extract=extract,
@@ -104,27 +104,27 @@ async def run(stage0_path: Path, out_path: Path, concurrency: int) -> None:
 @click.command(help=__doc__)
 @click.option(
     "-i",
-    "--stage0-path",
+    "--fetched-path",
     type=click.Path(exists=True),
-    default="data/stage0.jsonl",
-    help="Input stage-0 JSONL path.",
+    default="data/fetched.jsonl",
+    help="Input fetched-records JSONL path.",
 )
 @click.option(
     "-o",
     "--out-path",
     type=click.Path(),
-    default="data/stage1.jsonl",
+    default="data/extracted.jsonl",
     help="Output JSONL path.",
 )
 @click.option(
     "-c", "--concurrency", type=int, default=5, help="Max concurrent LLM requests."
 )
-def main(stage0_path: str, out_path: str, concurrency: int) -> None:
+def main(fetched_path: str, out_path: str, concurrency: int) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
-    asyncio.run(run(Path(stage0_path), Path(out_path), concurrency))
+    asyncio.run(run(Path(fetched_path), Path(out_path), concurrency))
 
 
 if __name__ == "__main__":

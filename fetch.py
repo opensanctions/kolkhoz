@@ -1,8 +1,8 @@
-"""Stage 0 fetch: cache the latest Pravda snapshot for each URL.
+"""Fetch: cache the latest Pravda snapshot for each URL.
 
 Reads a CSV of URLs, fetches the latest Pravda snapshot for each, and writes
-the snapshots to data/stage0.jsonl. No filtering, no LLM calls — this is just a
-snapshot cache so extraction stages can be re-run without re-hitting Pravda.
+the snapshots to data/fetched.jsonl. No filtering, no LLM calls — this is just
+a snapshot cache so extraction can be re-run without re-hitting Pravda.
 
 The output file doubles as cache: a URL already present is reused without a
 new lookup.
@@ -83,7 +83,7 @@ async def run(
     "-o",
     "--out-path",
     type=click.Path(),
-    default="data/stage0.jsonl",
+    default="data/fetched.jsonl",
     help="Output JSONL path.",
 )
 @click.option(

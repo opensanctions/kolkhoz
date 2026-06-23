@@ -1,9 +1,9 @@
-"""Shared driver for the extraction scripts.
+"""Shared driver for the extraction script.
 
-Each stage does the same dance per record — check a needed artifact is present,
-call the LLM, write the result back — and differs only in what it requires and
-how it extracts. `process_url` layers extraction fields onto a stage-0 record;
-each stage supplies a `requires` check and an `extract` coroutine. `run_batch`
+Extraction does the same dance per record — check a needed artifact is present,
+call the LLM, write the result back — parametrized by what it requires and
+how it extracts. `process_url` layers extraction fields onto a fetched record;
+the caller supplies a `requires` check and an `extract` coroutine. `run_batch`
 fans out over records not already in the output and merges the results back.
 """
 

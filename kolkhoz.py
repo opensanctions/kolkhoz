@@ -1,7 +1,12 @@
-"""Extract political position holders from web pages.
+"""Kolkhoz — turn raw web pages into structured data about political position holders.
 
-Reads a CSV of URLs, fetches the latest Pravda snapshot for each, runs an
-LLM extraction step, and writes the results to data/extracted.jsonl.
+Orchestrates Pravda web capture and LLM extraction into a single CLI:
+
+- ``snapshot-url``   snapshot a single URL through Pravda
+- ``snapshot-csv``   snapshot all URLs from a CSV through Pravda
+- ``extract``        read a CSV of URLs, fetch the latest Pravda snapshot for
+                      each, run an LLM extraction step, and write the results
+                      to data/extracted.jsonl
 """
 
 import asyncio
@@ -24,14 +29,43 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("kolkhoz")
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Pravda snapshotting
+# ===========================================================================
+
+
+def format_snapshot(data: dict) -> str:
+    lines = []
+    for key in ["id", "url", "captured_at", "http_status", "error"]:
+        if key in data:
+            lines.append(f"  {key}: {data[key]}")
+    if "contents" in data:
+        lines.append("  contents:")
+        for c in data["contents"]:
+            lines.append(f"    {c['path']}: {c['content_type']}")
+    if "headers" in data:
+        lines.append("  headers:")
+        for h in data["headers"]:
+            lines.append(f"    {h['name']}: {h['value']}")
+    return "\n".join(lines)
+
+
+async def async_snapshot_url(url: str) -> dict:
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{os.environ['PRAVDA_URL']}/snapshots", json={"url": url}
+        )
+        return resp.json()
+
+
+# ===========================================================================
 # Pravda read helpers — read captured blobs straight off Pravda's
 # content-addressed storage (the API returns file paths; we read them
 # directly, as Pravda intends).
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 
 async def latest_snapshot(client: httpx.AsyncClient, url: str) -> dict | None:
@@ -91,13 +125,13 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
     return tiles
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # LLM extraction — always sends the rendered page *text* to the model, and
 # exposes a ``get_screenshot`` function tool so the model can pull the
 # full-page screenshot (tiled into overlapping squares) only when the text is
 # insufficient. Uses the OpenAI Responses API with structured outputs and low
 # reasoning effort.
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 client = AsyncOpenAI()
 
@@ -262,9 +296,15 @@ async def extract(
     raise RuntimeError("extraction loop exhausted without a final answer")
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# CSV helpers
+# ===========================================================================
+
+
+def load_urls(path: str) -> list[str]:
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        return sorted({row["url"] for row in reader if row["url"].strip()})
 
 
 def write_jsonl(path: Path, records) -> None:
@@ -309,12 +349,28 @@ async def fetch_snapshot(
         return snapshot
 
 
-# ---------------------------------------------------------------------------
-# Core
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Core pipelines
+# ===========================================================================
 
 
-async def run(
+async def run_snapshot_csv(csv_path: str, concurrency: int) -> None:
+    urls = load_urls(csv_path)
+    print(f"Found {len(urls)} unique URLs in {csv_path}")
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def limited_snapshot(url: str) -> dict:
+        async with sem:
+            return await async_snapshot_url(url)
+
+    tasks = [asyncio.create_task(limited_snapshot(url)) for url in urls]
+    for task in asyncio.as_completed(tasks):
+        data = await task
+        print(format_snapshot(data))
+
+
+async def run_extract(
     csv_path: str,
     out_path: Path,
     sample: int | None,
@@ -420,12 +476,43 @@ async def extract_one(
         return out
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # CLI
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 
-@click.command(help=__doc__)
+@click.group(help=__doc__)
+def cli() -> None:
+    pass
+
+
+@cli.command("snapshot-url", help="Snapshot a single URL through Pravda.")
+@click.argument("url")
+def snapshot_url_cmd(url: str) -> None:
+    data = asyncio.run(async_snapshot_url(url))
+    print(format_snapshot(data))
+
+
+@cli.command("snapshot-csv", help="Snapshot all URLs from a CSV through Pravda.")
+@click.argument("csv_path", type=click.Path(exists=True))
+@click.option(
+    "-c",
+    "--concurrency",
+    type=int,
+    default=5,
+    help="Max concurrent requests to Pravda.",
+)
+def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
+    asyncio.run(run_snapshot_csv(csv_path, concurrency))
+
+
+@cli.command(
+    "extract",
+    help=(
+        "Read a CSV of URLs, fetch the latest Pravda snapshot for each, run an "
+        "LLM extraction step, and write the results to data/extracted.jsonl."
+    ),
+)
 @click.argument("csv_path", type=click.Path(exists=True))
 @click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
 @click.option(
@@ -441,7 +528,7 @@ async def extract_one(
 @click.option(
     "--extract-concurrency", type=int, default=5, help="Max concurrent LLM requests."
 )
-def main(
+def extract_cmd(
     csv_path: str,
     sample: int | None,
     out_path: str,
@@ -453,9 +540,11 @@ def main(
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
     asyncio.run(
-        run(csv_path, Path(out_path), sample, fetch_concurrency, extract_concurrency)
+        run_extract(
+            csv_path, Path(out_path), sample, fetch_concurrency, extract_concurrency
+        )
     )
 
 
 if __name__ == "__main__":
-    main()
+    cli()

@@ -24,13 +24,18 @@ uv sync
 
 ## Usage
 
+All commands run through a single `kolkhoz.py` CLI:
+
 ```bash
 # Snapshot a single URL
-uv run python scripts/snapshot_url.py https://example.org
+uv run python kolkhoz.py snapshot-url https://example.org
 
 # Snapshot all URLs from a CSV
-uv run python scripts/snapshot_urls_from_csv.py data/hio_leadership.csv
+uv run python kolkhoz.py snapshot-csv data/hio_leadership.csv
 
-# Analyze Pravda snapshot results
-uv run python scripts/analyze_pravda_results.py
+# Extract position holders from the latest snapshot of each URL in a CSV
+uv run python kolkhoz.py extract data/hio_leadership.csv
 ```
+
+Run `uv run python kolkhoz.py --help` (or `… <command> --help`) for the full
+set of options.

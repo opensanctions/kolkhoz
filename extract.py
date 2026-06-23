@@ -1,31 +1,43 @@
-"""Single agentic extraction: feed page text (and optionally the
-screenshot via a tool) to the LLM and record the position holders it finds.
+"""Extract political position holders from web pages.
 
-Reads records from data/fetched.jsonl. The model always receives the rendered
-page text; if the text is insufficient it can call ``get_screenshot`` to pull
-overlapping tiles of the full-page screenshot. Each record is also classified
-by page type (roster / profile / other).
+Reads a CSV of URLs, fetches the latest Pravda snapshot for each, runs an
+LLM extraction step, and writes the results to data/extracted.jsonl.
 
-Output: data/extracted.jsonl — every record layered on the fetched snapshot:
-  {url, snapshot_id, captured_at, plaintext, screenshot,
-   model, status, reason, page_type, holders, looked_at, provenance}
+The output file doubles as cache: a URL already present is reused without a
+new Pravda lookup or LLM call.
 """
 
 import asyncio
+import csv
 import logging
+import os
+import random
 from pathlib import Path
 
 import click
+import httpx
 
 from kolkhoz import extract as kolkhoz_extract
 from kolkhoz import pravda
-from kolkhoz.pipeline import run_batch
-from kolkhoz.utils import read_jsonl
+from kolkhoz.utils import read_jsonl, write_jsonl
 
 log = logging.getLogger(__name__)
 
 
-def requires(record: dict) -> str | None:
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def load_urls(path: str) -> list[str]:
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        return sorted(
+            {row["pep_url"].strip() for row in reader if row["pep_url"].strip()}
+        )
+
+
+def has_content(record: dict) -> str | None:
     """Return a miss reason when the page has neither usable text nor screenshot."""
     text = pravda.read_text(record.get("plaintext"))
     shot_path = record.get("screenshot")
@@ -37,43 +49,75 @@ def requires(record: dict) -> str | None:
     return None
 
 
-async def extract(record: dict) -> dict:
-    text = pravda.read_text(record.get("plaintext"))
-    shot_path = record.get("screenshot")
-    screenshot_blob = pravda.read_blob(shot_path) if shot_path else None
-    if screenshot_blob is not None and pravda.is_blank(screenshot_blob):
-        screenshot_blob = None
-
-    extraction, provenance = await kolkhoz_extract.extract(text, screenshot_blob)
-    holders = [holder.model_dump() for holder in extraction.holders]
-    status = "hit" if holders else "miss"
-    reason = None if holders else "no_holders"
-    return {
-        "status": status,
-        "reason": reason,
-        "page_type": extraction.page_type.value,
-        "holders": holders,
-        "provenance": provenance,
-    }
+async def fetch_snapshot(
+    client: httpx.AsyncClient,
+    url: str,
+    sem: asyncio.Semaphore,
+) -> dict | None:
+    async with sem:
+        snapshot = await pravda.latest_snapshot(client, url)
+        if snapshot is None:
+            log.info("  skip %s — no snapshot", url)
+        return snapshot
 
 
-async def run(fetched_path: Path, out_path: Path, concurrency: int) -> None:
-    records = read_jsonl(fetched_path)
-    log.info("%d fetched record(s) to extract", len(records))
-    if not records:
+# ---------------------------------------------------------------------------
+# Core
+# ---------------------------------------------------------------------------
+
+
+async def run(
+    csv_path: str,
+    out_path: Path,
+    sample: int | None,
+    fetch_concurrency: int,
+    extract_concurrency: int,
+) -> None:
+    # --- Fetch snapshots from Pravda ------------------------------------------
+    by_url = {r["url"]: r for r in read_jsonl(out_path)}
+
+    urls = load_urls(csv_path)
+    if sample is not None and sample < len(urls):
+        urls = random.sample(urls, sample)
+
+    new_urls = [u for u in urls if u not in by_url]
+    log.info(
+        "%d URL(s) total, %d already done, %d new",
+        len(urls),
+        len(by_url),
+        len(new_urls),
+    )
+
+    if new_urls:
+        sem = asyncio.Semaphore(fetch_concurrency)
+        async with httpx.AsyncClient(timeout=30) as client:
+            results = await asyncio.gather(
+                *[fetch_snapshot(client, url, sem) for url in new_urls]
+            )
+        kept = sum(1 for r in results if r is not None)
+        for record in results:
+            if record is not None:
+                by_url[record["url"]] = record
+        write_jsonl(out_path, by_url.values())
+        log.info("fetch: %d kept, %d skipped", kept, len(new_urls) - kept)
+
+    # --- Extract with LLM -----------------------------------------------------
+    pending = [r for r in by_url.values() if "status" not in r]
+    log.info("%d record(s) to extract", len(pending))
+
+    if not pending:
         return
 
-    results = await run_batch(
-        records,
-        out_path,
-        requires=requires,
-        extract=extract,
-        concurrency=concurrency,
-    )
+    sem = asyncio.Semaphore(extract_concurrency)
+    results = await asyncio.gather(*[extract_one(record, sem) for record in pending])
+    for record in results:
+        by_url[record["url"]] = record
+    write_jsonl(out_path, by_url.values())
+    log.info("wrote %d record(s) → %s", len(by_url), out_path)
 
     hits = [r for r in results if r["status"] == "hit"]
     misses = [r for r in results if r["status"] == "miss"]
-    log.info("%d hit, %d miss → %s", len(hits), len(misses), out_path)
+    log.info("extraction: %d hit, %d miss", len(hits), len(misses))
 
     # Page-type distribution
     pt_counts: dict[str, int] = {}
@@ -88,19 +132,6 @@ async def run(fetched_path: Path, out_path: Path, concurrency: int) -> None:
         pt_counts.get("other", 0),
     )
 
-    # How many records pulled the screenshot (a get_screenshot function_call
-    # appears in any of the per-round response dumps)
-    n_pulled = sum(
-        1
-        for r in results
-        if any(
-            o.get("type") == "function_call" and o.get("name") == "get_screenshot"
-            for resp in (r.get("provenance") or [])
-            for o in resp.get("output", [])
-        )
-    )
-    log.info("screenshot pulled: %d/%d", n_pulled, len(results))
-
     # Miss reason breakdown
     reasons: dict[str, int] = {}
     for r in misses:
@@ -109,14 +140,53 @@ async def run(fetched_path: Path, out_path: Path, concurrency: int) -> None:
         log.info("  miss/%s: %d", reason, count)
 
 
+async def extract_one(record: dict, sem: asyncio.Semaphore) -> dict:
+    """Extract holders from a single fetched record."""
+    async with sem:
+        out = {**record, "model": os.environ["OPENAI_MODEL"]}
+
+        missing = has_content(record)
+        if missing is not None:
+            log.info("%s → miss (%s)", record["url"], missing)
+            out.update(status="miss", reason=missing, holders=[], provenance=None)
+            return out
+
+        text = pravda.read_text(record.get("plaintext"))
+        shot_path = record.get("screenshot")
+        screenshot_blob = pravda.read_blob(shot_path) if shot_path else None
+        if screenshot_blob is not None and pravda.is_blank(screenshot_blob):
+            screenshot_blob = None
+
+        log.info("%s → extracting …", record["url"])
+        extraction, provenance = await kolkhoz_extract.extract(text, screenshot_blob)
+        holders = [holder.model_dump() for holder in extraction.holders]
+        status = "hit" if holders else "miss"
+        reason = None if holders else "no_holders"
+
+        out.update(
+            status=status,
+            reason=reason,
+            page_type=extraction.page_type.value,
+            holders=holders,
+            provenance=provenance,
+        )
+        log.info(
+            "%s → %s (%d holder(s))",
+            record["url"],
+            status,
+            len(holders),
+        )
+        return out
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
 @click.command(help=__doc__)
-@click.option(
-    "-i",
-    "--fetched-path",
-    type=click.Path(exists=True),
-    default="data/fetched.jsonl",
-    help="Input fetched-records JSONL path.",
-)
+@click.argument("csv_path", type=click.Path(exists=True))
+@click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
 @click.option(
     "-o",
     "--out-path",
@@ -125,14 +195,25 @@ async def run(fetched_path: Path, out_path: Path, concurrency: int) -> None:
     help="Output JSONL path.",
 )
 @click.option(
-    "-c", "--concurrency", type=int, default=5, help="Max concurrent LLM requests."
+    "--fetch-concurrency", type=int, default=10, help="Max concurrent Pravda requests."
 )
-def main(fetched_path: str, out_path: str, concurrency: int) -> None:
+@click.option(
+    "--extract-concurrency", type=int, default=5, help="Max concurrent LLM requests."
+)
+def main(
+    csv_path: str,
+    sample: int | None,
+    out_path: str,
+    fetch_concurrency: int,
+    extract_concurrency: int,
+) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
-    asyncio.run(run(Path(fetched_path), Path(out_path), concurrency))
+    asyncio.run(
+        run(csv_path, Path(out_path), sample, fetch_concurrency, extract_concurrency)
+    )
 
 
 if __name__ == "__main__":

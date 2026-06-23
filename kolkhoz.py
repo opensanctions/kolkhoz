@@ -6,7 +6,7 @@ Orchestrates Pravda web capture and LLM extraction into a single CLI:
 - ``snapshot-csv``   snapshot all URLs from a CSV through Pravda
 - ``extract``        read a CSV of URLs, fetch the latest Pravda snapshot for
                       each, run an LLM extraction step, and write the results
-                      to data/extracted.jsonl
+                      to data/<csv-stem>.extracted.jsonl
 """
 
 import asyncio
@@ -296,6 +296,12 @@ class InputRow(BaseModel):
     url: str
 
 
+def default_out_path(csv_path: str, kind: str) -> Path:
+    """Default output path derived from the input CSV: ``data/<stem>.<kind>.jsonl``."""
+    stem = Path(csv_path).stem
+    return Path("data") / f"{stem}.{kind}.jsonl"
+
+
 def load_input(path: str) -> list[InputRow]:
     """Parse the input CSV into typed rows, dropping rows with a blank URL."""
     with open(path) as f:
@@ -405,26 +411,12 @@ def cli() -> None:
 
 @cli.command("snapshot-url", help="Snapshot a single URL through Pravda.")
 @click.argument("url")
-@click.option(
-    "-o",
-    "--out-path",
-    type=click.Path(),
-    default="data/snapshots.jsonl",
-    help="Output JSONL path.",
-)
-def snapshot_url_cmd(url: str, out_path: str) -> None:
-    asyncio.run(run_snapshot_url(url, Path(out_path)))
+def snapshot_url_cmd(url: str) -> None:
+    asyncio.run(run_snapshot_url(url, Path("data/snapshots.jsonl")))
 
 
 @cli.command("snapshot-csv", help="Snapshot all URLs from a CSV through Pravda.")
 @click.argument("csv_path", type=click.Path(exists=True))
-@click.option(
-    "-o",
-    "--out-path",
-    type=click.Path(),
-    default="data/snapshots.jsonl",
-    help="Output JSONL path.",
-)
 @click.option(
     "-c",
     "--concurrency",
@@ -432,27 +424,23 @@ def snapshot_url_cmd(url: str, out_path: str) -> None:
     default=5,
     help="Max concurrent requests to Pravda.",
 )
-def snapshot_csv_cmd(csv_path: str, out_path: str, concurrency: int) -> None:
-    asyncio.run(run_snapshot_csv(load_input(csv_path), Path(out_path), concurrency))
+def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
+    out_path = default_out_path(csv_path, "snapshots")
+    asyncio.run(run_snapshot_csv(load_input(csv_path), out_path, concurrency))
 
 
 @cli.command(
     "extract",
     help=(
         "Read a CSV of URLs, fetch the latest Pravda snapshot for each, run an "
-        "LLM extraction step, and write the results to data/extracted.jsonl."
+        "LLM extraction step, and write the results to "
+        "data/<csv-stem>.extracted.jsonl."
     ),
 )
 @click.argument("csv_path", type=click.Path(exists=True))
 @click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
-@click.option(
-    "-o",
-    "--out-path",
-    type=click.Path(),
-    default="data/extracted.jsonl",
-    help="Output JSONL path.",
-)
-def extract_cmd(csv_path: str, sample: int | None, out_path: str) -> None:
+def extract_cmd(csv_path: str, sample: int | None) -> None:
+    out_path = default_out_path(csv_path, "extracted")
     rows = load_input(csv_path)
     if sample is not None and sample < len(rows):
         rows = random.sample(rows, sample)
@@ -465,7 +453,7 @@ def extract_cmd(csv_path: str, sample: int | None, out_path: str) -> None:
             if result is not None:
                 results.append(result)
 
-    write_jsonl(Path(out_path), results)
+    write_jsonl(out_path, results)
     log.info("wrote %d record(s) → %s", len(results), out_path)
 
     hits = [r for r in results if r["status"] == "hit"]

@@ -1,13 +1,14 @@
-"""Stage 1 extraction: feed non-empty snapshot text to the LLM and record the
-position holders it finds.
+"""Single agentic extraction stage: feed page text (and optionally the
+screenshot via a tool) to the LLM and record the position holders it finds.
 
-Reads records from data/stage0.jsonl. Results land in two files:
-  - data/stage1.jsonl: every record (hits + misses), layered on top of stage 0.
-  - data/stage1_misses.jsonl: the stage-0 records that missed, for stage 2.
+Reads records from data/stage0.jsonl. The model always receives the rendered
+page text; if the text is insufficient it can call ``get_screenshot`` to pull
+overlapping tiles of the full-page screenshot. Each record is also classified
+by page type (roster / profile / other).
 
-Each record:
+Output: data/stage1.jsonl — every record layered on stage 0:
   {url, snapshot_id, captured_at, plaintext, screenshot,
-   model, status, reason, holders, usage}
+   model, status, reason, page_type, holders, looked_at, usage}
 """
 
 import asyncio
@@ -16,37 +17,53 @@ from pathlib import Path
 
 import click
 
+from kolkhoz import extract as kolkhoz_extract
 from kolkhoz import pravda
-from kolkhoz.extract import extract_from_text
 from kolkhoz.pipeline import run_batch
-from kolkhoz.utils import read_jsonl, write_jsonl
+from kolkhoz.utils import read_jsonl
 
 log = logging.getLogger(__name__)
 
 
 def requires(record: dict) -> str | None:
+    """Return a miss reason when the page has neither usable text nor screenshot."""
     text = pravda.read_text(record.get("plaintext"))
-    return None if text.strip() else "no_text"
+    shot_path = record.get("screenshot")
+    screenshot_available = bool(shot_path) and not pravda.is_blank(
+        pravda.read_blob(shot_path)
+    )
+    if not text.strip() and not screenshot_available:
+        return "no_content"
+    return None
 
 
 async def extract(record: dict) -> dict:
     text = pravda.read_text(record.get("plaintext"))
-    extraction, usage = await extract_from_text(text)
+    shot_path = record.get("screenshot")
+    screenshot_blob = pravda.read_blob(shot_path) if shot_path else None
+    if screenshot_blob is not None and pravda.is_blank(screenshot_blob):
+        screenshot_blob = None
+
+    extraction, usage, looked_at = await kolkhoz_extract.extract(text, screenshot_blob)
     holders = [holder.model_dump() for holder in extraction.holders]
     status = "hit" if holders else "miss"
     reason = None if holders else "no_holders"
-    return {"status": status, "reason": reason, "holders": holders, "usage": usage}
+    return {
+        "status": status,
+        "reason": reason,
+        "page_type": extraction.page_type.value,
+        "holders": holders,
+        "looked_at": looked_at,
+        "usage": usage,
+    }
 
 
-async def run(
-    stage0_path: Path, out_path: Path, misses_path: Path, concurrency: int
-) -> None:
+async def run(stage0_path: Path, out_path: Path, concurrency: int) -> None:
     stage0 = read_jsonl(stage0_path)
     log.info("%d stage-0 record(s) to extract", len(stage0))
     if not stage0:
         return
 
-    stage0_by_url = {r["url"]: r for r in stage0}
     results = await run_batch(
         stage0,
         out_path,
@@ -55,18 +72,31 @@ async def run(
         concurrency=concurrency,
     )
 
-    hits = [record for record in results if record["status"] == "hit"]
-    misses = [record for record in results if record["status"] == "miss"]
+    hits = [r for r in results if r["status"] == "hit"]
+    misses = [r for r in results if r["status"] == "miss"]
     log.info("%d hit, %d miss → %s", len(hits), len(misses), out_path)
 
-    # Pass the stage-0 records for misses on to stage 2 (eyes-only retry).
-    if misses:
-        miss_records = [stage0_by_url[r["url"]] for r in misses]
-        write_jsonl(misses_path, miss_records)
-        log.info("Wrote %d miss(es) → %s", len(miss_records), misses_path)
+    # Page-type distribution
+    pt_counts: dict[str, int] = {}
+    for r in results:
+        pt = r.get("page_type")
+        if pt is not None:
+            pt_counts[pt] = pt_counts.get(pt, 0) + 1
+    log.info(
+        "page_type: roster=%d profile=%d other=%d",
+        pt_counts.get("roster", 0),
+        pt_counts.get("profile", 0),
+        pt_counts.get("other", 0),
+    )
+
+    # How many records pulled the screenshot
+    n_pulled = sum(1 for r in results if "screenshot" in r.get("looked_at", []))
+    log.info("screenshot pulled: %d/%d", n_pulled, len(results))
+
+    # Miss reason breakdown
     reasons: dict[str, int] = {}
-    for record in misses:
-        reasons[record["reason"]] = reasons.get(record["reason"], 0) + 1
+    for r in misses:
+        reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
     for reason, count in sorted(reasons.items()):
         log.info("  miss/%s: %d", reason, count)
 
@@ -87,21 +117,14 @@ async def run(
     help="Output JSONL path.",
 )
 @click.option(
-    "-m",
-    "--misses-path",
-    type=click.Path(),
-    default="data/stage1_misses.jsonl",
-    help="Misses output JSONL path.",
-)
-@click.option(
     "-c", "--concurrency", type=int, default=5, help="Max concurrent LLM requests."
 )
-def main(stage0_path: str, out_path: str, misses_path: str, concurrency: int) -> None:
+def main(stage0_path: str, out_path: str, concurrency: int) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
-    asyncio.run(run(Path(stage0_path), Path(out_path), Path(misses_path), concurrency))
+    asyncio.run(run(Path(stage0_path), Path(out_path), concurrency))
 
 
 if __name__ == "__main__":

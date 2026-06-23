@@ -1,15 +1,18 @@
 """Extract political position holders from a page via the OpenAI API.
 
-Stage 1 feeds the rendered page text. Stage 2 retries stage-1 misses with the
-full-page screenshot on its own (stage 1 already failed on the text, so the
-text isn't re-sent), tiled into overlapping squares so the model never has to
-rescale a page larger than its image cap. Both use strict structured outputs,
-a cached static prompt prefix (the instructions), and low reasoning effort.
+Single agentic step: always sends the rendered page *text* to the model, and
+exposes a ``get_screenshot`` function tool so the model can pull the full-page
+screenshot (tiled into overlapping squares) only when the text is insufficient.
+This avoids wasting expensive tiled-image vision on pages that genuinely have
+no holders, while still rescuing names that only live in the screenshot.
+
+Uses the OpenAI Responses API with structured outputs and low reasoning effort.
 """
 
 import base64
 import logging
 import os
+from enum import Enum
 
 from kolkhoz import pravda
 from openai import AsyncOpenAI
@@ -20,6 +23,7 @@ log = logging.getLogger(__name__)
 client = AsyncOpenAI()
 
 REASONING_EFFORT = "low"
+MAX_ROUNDS = 2
 
 INSTRUCTIONS = """\
 You extract political position holders from the content of a single web page.
@@ -38,7 +42,37 @@ Rules:
 - Do not invent people. Only extract humans actually named on the page.
 - Ignore names that are not position holders (authors, contacts, mentions).
 - If the page names no position holders, return an empty list.
+- First, classify the page as `roster`, `profile`, or `other` (see field
+  descriptions).
+- The page TEXT is given to you. The full-page SCREENSHOT is NOT included by
+  default. If the text is insufficient to read the holders — names appear to
+  be in images, the page is JS-rendered, or the text is too thin even to tell
+  what kind of page it is — call `get_screenshot` and then extract. Otherwise
+  do not call it; answer from the text.
+- `page_type=other` should be used for generic pages (about, contact, article,
+  landing) that are not in the business of listing position holders.
 """
+
+TOOLS = [
+    {
+        "type": "function",
+        "name": "get_screenshot",
+        "description": (
+            "Return the full-page screenshot of this page, tiled into overlapping squares. "
+            "Call this ONLY when the text alone is not enough to read the position holders — "
+            "for example the names seem to be in images, a JS-rendered org chart, or the text "
+            "is too thin to tell what the page is. Do NOT call it if the text already names "
+            "the holders, or if the page clearly has no roster."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+]
+
+
+class PageType(str, Enum):
+    roster = "roster"  # page that lists named position holders (board, council, staff, directory)
+    profile = "profile"  # a single person's bio / CV / appointment page
+    other = "other"  # about/contact/landing/article — not expected to list holders
 
 
 class Holder(BaseModel):
@@ -51,67 +85,96 @@ class Holder(BaseModel):
 
 
 class Extraction(BaseModel):
+    page_type: PageType = Field(description="The kind of page this is.")
     holders: list[Holder] = Field(
         description="Position holders found on the page. Empty if none."
     )
 
 
-async def _parse(page_content: list[dict]) -> tuple[Extraction, dict]:
-    response = await client.responses.parse(
-        model=os.environ["OPENAI_MODEL"],
-        instructions=INSTRUCTIONS,
-        input=[{"role": "user", "content": page_content}],
-        reasoning={"effort": REASONING_EFFORT},
-        text_format=Extraction,
-    )
-    usage = {
-        "input_tokens": response.usage.input_tokens,
-        "output_tokens": response.usage.output_tokens,
-    }
-    # Guard against refusals — the model may decline for safety reasons.
-    if response.output_parsed is None:
-        raise ValueError(
-            f"Model returned no parsed output (possible refusal): {response.output}"
-        )
-    return response.output_parsed, usage
+async def extract(
+    text: str, screenshot_blob: bytes | None
+) -> tuple[Extraction, dict, list[str]]:
+    """Extract holders from one page.
 
+    Always sends *text*. The model may pull the *screenshot* via the
+    ``get_screenshot`` tool.
 
-async def extract_from_text(text: str) -> tuple[Extraction, dict]:
-    """Stage 1: extract holders from the page text alone."""
-    return await _parse([{"type": "input_text", "text": text}])
-
-
-async def extract_from_image(screenshot: bytes) -> tuple[Extraction, dict]:
-    """Stage 2: extract holders from the full-page screenshot alone.
-
-    The screenshot is tiled into overlapping squares under the model's image
-    cap; all tiles are sent in a single request.
+    Returns (extraction, usage, looked_at) where looked_at is e.g.
+    ``["text"]`` or ``["text", "screenshot"]``.
     """
     tile = int(os.environ["IMAGE_TILE_SIZE"])
     overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
-    tiles = pravda.split_image(screenshot, tile, overlap)
-    log.info("tiled screenshot into %d piece(s)", len(tiles))
 
-    # Tell the model the images are tiles of one screenshot, not separate
-    # pages: tiles overlap, so the same person/position may recur.
-    content = [
-        {
-            "type": "input_text",
-            "text": (
-                f"The following {len(tiles)} image(s) are overlapping tiles of a "
-                "single full-page screenshot of one web page, split to fit the "
-                "size limit. Read them together as one page. Tiles overlap, so "
-                "the same person or position may appear in more than one tile — "
-                "extract each holder once."
-            ),
-        },
-        *[
-            {
-                "type": "input_image",
-                "image_url": "data:image/png;base64,"
-                + base64.b64encode(piece).decode(),
-            }
-            for piece in tiles
-        ],
-    ]
-    return await _parse(content)
+    input_items = [{"role": "user", "content": [{"type": "input_text", "text": text}]}]
+    looked_at = ["text"]
+    usage = {"input_tokens": 0, "output_tokens": 0}
+
+    for _ in range(MAX_ROUNDS):
+        response = await client.responses.parse(
+            model=os.environ["OPENAI_MODEL"],
+            instructions=INSTRUCTIONS,
+            input=input_items,
+            tools=TOOLS,
+            text_format=Extraction,
+            reasoning={"effort": REASONING_EFFORT},
+        )
+        usage["input_tokens"] += response.usage.input_tokens
+        usage["output_tokens"] += response.usage.output_tokens
+
+        # Does the model want the screenshot?
+        tool_calls = [
+            o
+            for o in response.output
+            if o.type == "function_call" and o.name == "get_screenshot"
+        ]
+        if not tool_calls:
+            # No tool call -> final structured answer.
+            if response.output_parsed is None:
+                raise ValueError(
+                    f"Model returned no parsed output (possible refusal): {response.output}"
+                )
+            return response.output_parsed, usage, looked_at
+
+        # It asked for the screenshot. Append the assistant's call(s) + our
+        # tool result, loop again.
+        if "screenshot" in looked_at:
+            break  # safety: don't fetch twice
+        if screenshot_blob is None:
+            # Can't fulfil the request. Tell the model so it can answer from
+            # text alone.
+            out_content = "No screenshot is available for this page."
+        else:
+            tiles = pravda.split_image(screenshot_blob, tile, overlap)
+            looked_at.append("screenshot")
+            out_content = [
+                {
+                    "type": "input_text",
+                    "text": (
+                        f"The {len(tiles)} image(s) below are overlapping tiles "
+                        "of a single full-page screenshot of the same page. Read "
+                        "them together as one page. Tiles overlap, so the same "
+                        "person/position may recur — extract each holder once."
+                    ),
+                },
+                *[
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/png;base64,"
+                        + base64.b64encode(t).decode(),
+                    }
+                    for t in tiles
+                ],
+            ]
+        input_items += (
+            response.output
+        )  # echoes the assistant's function_call item(s) back
+        for tc in tool_calls:
+            input_items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": tc.call_id,
+                    "output": out_content,
+                }
+            )
+
+    raise RuntimeError("extraction loop exhausted without a final answer")

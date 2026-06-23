@@ -1,11 +1,10 @@
-"""Shared driver for the staged extraction scripts.
+"""Shared driver for the extraction scripts.
 
-Both stages do the same dance per record — check the needed artifact is present,
-call the LLM, write the result back — and differ only in which artifact they
-require and how they extract. `process_url` layers extraction fields onto a
-stage-0 record (so stage 1/2 output is stage-0 output plus extraction); each stage
-supplies a `requires` check and an `extract` coroutine. `run_batch` fans out
-over records not already in the output and merges the results back.
+Each stage does the same dance per record — check a needed artifact is present,
+call the LLM, write the result back — and differs only in what it requires and
+how it extracts. `process_url` layers extraction fields onto a stage-0 record;
+each stage supplies a `requires` check and an `extract` coroutine. `run_batch`
+fans out over records not already in the output and merges the results back.
 """
 
 import asyncio

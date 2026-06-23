@@ -49,12 +49,12 @@ def is_blank(blob: bytes) -> bool:
 
 
 def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
-    """Tile an image into *overlap*-fraction overlapping *tile*-px squares.
+    """Slice an image into *overlap*-fraction overlapping *tile*-px tall strips.
 
-    Full *tile*-px squares are laid out on a stride of ``tile * (1 - overlap)``;
-    whatever falls off the end is emitted as a single narrower remainder tile
-    (e.g. a 5000px axis at tile 2048 yields two 2048px tiles + one 904px tile).
-    Images that fit inside *tile* in both dimensions come back as a single tile.
+    Screenshots are hardclipped for width, so only the height axis ever needs
+    slicing: each strip keeps the full width. Strips are laid out on a stride
+    of ``tile * (1 - overlap)``, with a shorter remainder strip at the end if
+    needed. Images no taller than *tile* come back as a single strip.
     """
     image = Image.open(io.BytesIO(blob))
     width, height = image.size
@@ -73,9 +73,8 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
         return result
 
     tiles: list[bytes] = []
-    for left, right in spans(width):
-        for top, bottom in spans(height):
-            buf = io.BytesIO()
-            image.crop((left, top, right, bottom)).save(buf, format="PNG")
-            tiles.append(buf.getvalue())
+    for top, bottom in spans(height):
+        buf = io.BytesIO()
+        image.crop((0, top, width, bottom)).save(buf, format="PNG")
+        tiles.append(buf.getvalue())
     return tiles

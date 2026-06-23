@@ -301,12 +301,6 @@ async def extract(
 # ===========================================================================
 
 
-def load_urls(path: str) -> list[str]:
-    with open(path) as f:
-        reader = csv.DictReader(f)
-        return sorted({row["url"] for row in reader if row["url"].strip()})
-
-
 def write_jsonl(path: Path, records) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as f:
@@ -354,9 +348,9 @@ async def fetch_snapshot(
 # ===========================================================================
 
 
-async def run_snapshot_csv(csv_path: str, concurrency: int) -> None:
-    urls = load_urls(csv_path)
-    print(f"Found {len(urls)} unique URLs in {csv_path}")
+async def run_snapshot_csv(rows: list[InputRow], concurrency: int) -> None:
+    urls = [row.url for row in rows]
+    print(f"Found {len(urls)} URL(s)")
 
     sem = asyncio.Semaphore(concurrency)
 
@@ -371,41 +365,32 @@ async def run_snapshot_csv(csv_path: str, concurrency: int) -> None:
 
 
 async def run_extract(
-    csv_path: str,
+    rows: list[InputRow],
     out_path: Path,
     sample: int | None,
     fetch_concurrency: int,
     extract_concurrency: int,
 ) -> None:
     # --- Fetch snapshots from Pravda ------------------------------------------
-    inputs = load_input(csv_path)
-    # last row wins if a URL repeats across the input file
-    by_url_input = {row.url: row for row in inputs}
-    urls = sorted(by_url_input)
-
-    if sample is not None and sample < len(urls):
-        urls = random.sample(urls, sample)
-    log.info("%d URL(s) to fetch", len(urls))
+    if sample is not None and sample < len(rows):
+        rows = random.sample(rows, sample)
+    log.info("%d URL(s) to fetch", len(rows))
 
     sem = asyncio.Semaphore(fetch_concurrency)
     async with httpx.AsyncClient(timeout=30) as client:
-        results = await asyncio.gather(
-            *[fetch_snapshot(client, url, sem) for url in urls]
+        snapshots = await asyncio.gather(
+            *[fetch_snapshot(client, row.url, sem) for row in rows]
         )
-    records = [r for r in results if r is not None]
-    log.info("fetch: %d kept, %d skipped", len(records), len(urls) - len(records))
+    # keep rows whose snapshot was found; carry the row alongside its metadata
+    fetched = [(row, snap) for row, snap in zip(rows, snapshots) if snap is not None]
+    log.info("fetch: %d kept, %d skipped", len(fetched), len(rows) - len(fetched))
 
     # --- Extract with LLM -----------------------------------------------------
-    log.info("%d record(s) to extract", len(records))
-
-    fallback_position = {url: row.position for url, row in by_url_input.items()}
+    log.info("%d record(s) to extract", len(fetched))
 
     sem = asyncio.Semaphore(extract_concurrency)
     results = await asyncio.gather(
-        *[
-            extract_one(record, sem, fallback_position.get(record["url"]))
-            for record in records
-        ]
+        *[extract_one(snap, sem, row.position) for row, snap in fetched]
     )
     write_jsonl(out_path, results)
     log.info("wrote %d record(s) → %s", len(results), out_path)
@@ -503,7 +488,7 @@ def snapshot_url_cmd(url: str) -> None:
     help="Max concurrent requests to Pravda.",
 )
 def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
-    asyncio.run(run_snapshot_csv(csv_path, concurrency))
+    asyncio.run(run_snapshot_csv(load_input(csv_path), concurrency))
 
 
 @cli.command(
@@ -541,7 +526,11 @@ def extract_cmd(
     )
     asyncio.run(
         run_extract(
-            csv_path, Path(out_path), sample, fetch_concurrency, extract_concurrency
+            load_input(csv_path),
+            Path(out_path),
+            sample,
+            fetch_concurrency,
+            extract_concurrency,
         )
     )
 

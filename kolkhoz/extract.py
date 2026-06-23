@@ -1,7 +1,7 @@
 """Extract political position holders from a page via the OpenAI API.
 
-Tier 1 feeds the rendered page text. Tier 2 retries tier-1 misses with the
-full-page screenshot on its own (tier 1 already failed on the text, so the
+Stage 1 feeds the rendered page text. Stage 2 retries stage-1 misses with the
+full-page screenshot on its own (stage 1 already failed on the text, so the
 text isn't re-sent), tiled into overlapping squares so the model never has to
 rescale a page larger than its image cap. Both use strict structured outputs,
 a cached static prompt prefix (the instructions), and low reasoning effort.
@@ -77,12 +77,12 @@ async def _parse(page_content: list[dict]) -> tuple[Extraction, dict]:
 
 
 async def extract_from_text(text: str) -> tuple[Extraction, dict]:
-    """Tier 1: extract holders from the page text alone."""
+    """Stage 1: extract holders from the page text alone."""
     return await _parse([{"type": "input_text", "text": text}])
 
 
 async def extract_from_image(screenshot: bytes) -> tuple[Extraction, dict]:
-    """Tier 2: extract holders from the full-page screenshot alone.
+    """Stage 2: extract holders from the full-page screenshot alone.
 
     The screenshot is tiled into overlapping squares under the model's image
     cap; all tiles are sent in a single request.

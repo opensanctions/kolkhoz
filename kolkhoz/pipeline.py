@@ -1,9 +1,9 @@
-"""Shared driver for the tiered extraction scripts.
+"""Shared driver for the staged extraction scripts.
 
-Both tiers do the same dance per record — check the needed artifact is present,
+Both stages do the same dance per record — check the needed artifact is present,
 call the LLM, write the result back — and differ only in which artifact they
 require and how they extract. `process_url` layers extraction fields onto a
-tier-0 record (so tier 1/2 output is tier-0 output plus extraction); each tier
+stage-0 record (so stage 1/2 output is stage-0 output plus extraction); each stage
 supplies a `requires` check and an `extract` coroutine. `run_batch` fans out
 over records not already in the output and merges the results back.
 """

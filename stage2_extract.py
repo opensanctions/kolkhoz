@@ -1,13 +1,13 @@
-"""Tier 2 extraction: fallback for pages tier 1 missed, using the full-page
+"""Stage 2 extraction: fallback for pages stage 1 missed, using the full-page
 screenshot on its own.
 
-Reads misses from data/tier1_misses.jsonl (produced by tier 1). Tier 1 already
-failed on the text, so tier 2 retries with eyes only — the screenshot catches
+Reads misses from data/stage1_misses.jsonl (produced by stage 1). Stage 1 already
+failed on the text, so stage 2 retries with eyes only — the screenshot catches
 names the rendered text didn't carry (JS shells, text baked into images).
 Records with no screenshot, or a blank one, are skipped. Results land in two
 files:
-  - data/tier2.jsonl: every record (rescued + misses), layered on tier 0.
-  - data/tier2_misses.jsonl: the input records tier 2 also missed.
+  - data/stage2.jsonl: every record (rescued + misses), layered on stage 0.
+  - data/stage2_misses.jsonl: the input records stage 2 also missed.
 """
 
 import asyncio
@@ -45,7 +45,7 @@ async def run(
     misses_path: Path, out_path: Path, out_misses_path: Path, concurrency: int
 ) -> None:
     misses = read_jsonl(misses_path)
-    log.info("%d tier-1 miss(es) to retry with screenshot", len(misses))
+    log.info("%d stage-1 miss(es) to retry with screenshot", len(misses))
     if not misses:
         return
 
@@ -62,7 +62,7 @@ async def run(
     still_miss = [record for record in results if record["status"] == "miss"]
     log.info("%d rescued, %d still miss → %s", len(rescued), len(still_miss), out_path)
 
-    # Keep the records tier 2 also missed, for later inspection.
+    # Keep the records stage 2 also missed, for later inspection.
     if still_miss:
         miss_records = [misses_by_url[r["url"]] for r in still_miss]
         write_jsonl(out_misses_path, miss_records)
@@ -79,21 +79,21 @@ async def run(
     "-i",
     "--misses-path",
     type=click.Path(exists=True),
-    default="data/tier1_misses.jsonl",
-    help="Input tier-1 misses JSONL path.",
+    default="data/stage1_misses.jsonl",
+    help="Input stage-1 misses JSONL path.",
 )
 @click.option(
     "-o",
     "--out-path",
     type=click.Path(),
-    default="data/tier2.jsonl",
+    default="data/stage2.jsonl",
     help="Output JSONL path.",
 )
 @click.option(
     "-m",
     "--out-misses-path",
     type=click.Path(),
-    default="data/tier2_misses.jsonl",
+    default="data/stage2_misses.jsonl",
     help="Misses output JSONL path.",
 )
 @click.option(

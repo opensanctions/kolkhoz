@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 # requires(record) -> miss reason if a needed artifact is absent, else None.
 Requires = Callable[[dict], str | None]
-# extract(record) -> {status, reason, holders, usage}.
+# extract(record) -> {status, reason, page_type, holders, looked_at, provenance}.
 Extract = Callable[[dict], Awaitable[dict]]
 
 
@@ -36,7 +36,7 @@ async def process_url(
         missing = requires(record)
         if missing is not None:
             log.info("%s → miss (%s)", record["url"], missing)
-            out.update(status="miss", reason=missing, holders=[], usage=None)
+            out.update(status="miss", reason=missing, holders=[], provenance=None)
             return out
 
         log.info("%s → extracting …", record["url"])

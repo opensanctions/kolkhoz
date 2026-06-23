@@ -1,8 +1,9 @@
 """Fetch: cache the latest Pravda snapshot for each URL.
 
 Reads a CSV of URLs, fetches the latest Pravda snapshot for each, and writes
-the snapshots to data/fetched.jsonl. No filtering, no LLM calls — this is just
-a snapshot cache so extraction can be re-run without re-hitting Pravda.
+the raw API response verbatim to data/fetched.jsonl. No filtering, no LLM
+calls — this is just a snapshot cache so extraction can be re-run without
+re-hitting Pravda.
 
 The output file doubles as cache: a URL already present is reused without a
 new lookup.
@@ -38,14 +39,7 @@ async def fetch_snapshot(
         if snapshot is None:
             print(f"  skip {url} — no snapshot")
             return None
-
-        return {
-            "url": url,
-            "snapshot_id": snapshot["id"],
-            "captured_at": snapshot["captured_at"],
-            "plaintext": snapshot.get("plaintext"),
-            "screenshot": snapshot.get("screenshot"),
-        }
+        return snapshot
 
 
 async def run(

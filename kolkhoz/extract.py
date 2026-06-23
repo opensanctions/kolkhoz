@@ -93,21 +93,23 @@ class Extraction(BaseModel):
 
 async def extract(
     text: str, screenshot_blob: bytes | None
-) -> tuple[Extraction, dict, list[str]]:
+) -> tuple[Extraction, list[dict]]:
     """Extract holders from one page.
 
     Always sends *text*. The model may pull the *screenshot* via the
     ``get_screenshot`` tool.
 
-    Returns (extraction, usage, looked_at) where looked_at is e.g.
-    ``["text"]`` or ``["text", "screenshot"]``.
+    Returns (extraction, provenance) where provenance is the full dump of
+    every model response, one per round (id, model, token usage, reasoning,
+    function calls, and the final parsed answer all live in there). Whether
+    the model pulled the screenshot is recoverable from the function_call
+    items in those dumps.
     """
     tile = int(os.environ["IMAGE_TILE_SIZE"])
     overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
 
     input_items = [{"role": "user", "content": [{"type": "input_text", "text": text}]}]
-    looked_at = ["text"]
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    provenance: list[dict] = []
 
     for _ in range(MAX_ROUNDS):
         response = await client.responses.parse(
@@ -118,8 +120,7 @@ async def extract(
             text_format=Extraction,
             reasoning={"effort": REASONING_EFFORT},
         )
-        usage["input_tokens"] += response.usage.input_tokens
-        usage["output_tokens"] += response.usage.output_tokens
+        provenance.append(response.model_dump(mode="json"))
 
         # Does the model want the screenshot?
         tool_calls = [
@@ -133,19 +134,16 @@ async def extract(
                 raise ValueError(
                     f"Model returned no parsed output (possible refusal): {response.output}"
                 )
-            return response.output_parsed, usage, looked_at
+            return response.output_parsed, provenance
 
         # It asked for the screenshot. Append the assistant's call(s) + our
         # tool result, loop again.
-        if "screenshot" in looked_at:
-            break  # safety: don't fetch twice
         if screenshot_blob is None:
             # Can't fulfil the request. Tell the model so it can answer from
             # text alone.
             out_content = "No screenshot is available for this page."
         else:
             tiles = pravda.split_image(screenshot_blob, tile, overlap)
-            looked_at.append("screenshot")
             out_content = [
                 {
                     "type": "input_text",

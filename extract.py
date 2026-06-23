@@ -8,7 +8,7 @@ by page type (roster / profile / other).
 
 Output: data/extracted.jsonl — every record layered on the fetched snapshot:
   {url, snapshot_id, captured_at, plaintext, screenshot,
-   model, status, reason, page_type, holders, looked_at, usage}
+   model, status, reason, page_type, holders, looked_at, provenance}
 """
 
 import asyncio
@@ -44,7 +44,7 @@ async def extract(record: dict) -> dict:
     if screenshot_blob is not None and pravda.is_blank(screenshot_blob):
         screenshot_blob = None
 
-    extraction, usage, looked_at = await kolkhoz_extract.extract(text, screenshot_blob)
+    extraction, provenance = await kolkhoz_extract.extract(text, screenshot_blob)
     holders = [holder.model_dump() for holder in extraction.holders]
     status = "hit" if holders else "miss"
     reason = None if holders else "no_holders"
@@ -53,8 +53,7 @@ async def extract(record: dict) -> dict:
         "reason": reason,
         "page_type": extraction.page_type.value,
         "holders": holders,
-        "looked_at": looked_at,
-        "usage": usage,
+        "provenance": provenance,
     }
 
 
@@ -89,8 +88,17 @@ async def run(fetched_path: Path, out_path: Path, concurrency: int) -> None:
         pt_counts.get("other", 0),
     )
 
-    # How many records pulled the screenshot
-    n_pulled = sum(1 for r in results if "screenshot" in r.get("looked_at", []))
+    # How many records pulled the screenshot (a get_screenshot function_call
+    # appears in any of the per-round response dumps)
+    n_pulled = sum(
+        1
+        for r in results
+        if any(
+            o.get("type") == "function_call" and o.get("name") == "get_screenshot"
+            for resp in (r.get("provenance") or [])
+            for o in resp.get("output", [])
+        )
+    )
     log.info("screenshot pulled: %d/%d", n_pulled, len(results))
 
     # Miss reason breakdown

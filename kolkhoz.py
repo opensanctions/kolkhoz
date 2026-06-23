@@ -23,7 +23,7 @@ from pathlib import Path
 import click
 import httpx
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -52,11 +52,9 @@ async def async_snapshot_url(url: str) -> dict:
 # ===========================================================================
 
 
-async def latest_snapshot(client: httpx.AsyncClient, url: str) -> dict | None:
+def latest_snapshot(client: httpx.Client, url: str) -> dict | None:
     """Return the most recent snapshot for *url*, or None if there are none."""
-    resp = await client.get(
-        f"{os.environ['PRAVDA_URL']}/snapshots", params={"url": url}
-    )
+    resp = client.get(f"{os.environ['PRAVDA_URL']}/snapshots", params={"url": url})
     resp.raise_for_status()
     items = resp.json().get("items", [])
     return items[0] if items else None  # the API returns newest first
@@ -117,7 +115,7 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
 # reasoning effort.
 # ===========================================================================
 
-client = AsyncOpenAI()
+client = OpenAI()
 
 REASONING_EFFORT = "low"
 MAX_ROUNDS = 2
@@ -193,9 +191,7 @@ class Extraction(BaseModel):
     )
 
 
-async def extract(
-    text: str, screenshot_blob: bytes | None
-) -> tuple[Extraction, list[dict]]:
+def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[dict]]:
     """Extract holders from one page.
 
     Always sends *text*. The model may pull the *screenshot* via the
@@ -214,7 +210,7 @@ async def extract(
     provenance: list[dict] = []
 
     for _ in range(MAX_ROUNDS):
-        response = await client.responses.parse(
+        response = client.responses.parse(
             model=os.environ["OPENAI_MODEL"],
             instructions=INSTRUCTIONS,
             input=input_items,
@@ -315,18 +311,6 @@ def load_input(path: str) -> list[InputRow]:
         ]
 
 
-async def fetch_snapshot(
-    client: httpx.AsyncClient,
-    url: str,
-    sem: asyncio.Semaphore,
-) -> dict | None:
-    async with sem:
-        snapshot = await latest_snapshot(client, url)
-        if snapshot is None:
-            log.info("  skip %s — no snapshot", url)
-        return snapshot
-
-
 # ===========================================================================
 # Core pipelines
 # ===========================================================================
@@ -361,101 +345,49 @@ async def run_snapshot_csv(
     log.info("wrote %d snapshot(s) → %s", len(results), out_path)
 
 
-async def run_extract(
-    rows: list[InputRow],
-    out_path: Path,
-    sample: int | None,
-    fetch_concurrency: int,
-    extract_concurrency: int,
-) -> None:
-    # --- Fetch snapshots from Pravda ------------------------------------------
-    if sample is not None and sample < len(rows):
-        rows = random.sample(rows, sample)
-    log.info("%d URL(s) to fetch", len(rows))
+def extract_one(client: httpx.Client, row: InputRow) -> dict | None:
+    """Fetch the latest snapshot for *row* and extract holders from it.
 
-    sem = asyncio.Semaphore(fetch_concurrency)
-    async with httpx.AsyncClient(timeout=30) as client:
-        snapshots = await asyncio.gather(
-            *[fetch_snapshot(client, row.url, sem) for row in rows]
-        )
-    # keep rows whose snapshot was found; carry the row alongside its metadata
-    fetched = [(row, snap) for row, snap in zip(rows, snapshots) if snap is not None]
-    log.info("fetch: %d kept, %d skipped", len(fetched), len(rows) - len(fetched))
+    Returns None if Pravda has no snapshot for the URL.
 
-    # --- Extract with LLM -----------------------------------------------------
-    log.info("%d record(s) to extract", len(fetched))
-
-    sem = asyncio.Semaphore(extract_concurrency)
-    results = await asyncio.gather(
-        *[extract_one(snap, sem, row.position) for row, snap in fetched]
-    )
-    write_jsonl(out_path, results)
-    log.info("wrote %d record(s) → %s", len(results), out_path)
-
-    hits = [r for r in results if r["status"] == "hit"]
-    misses = [r for r in results if r["status"] == "miss"]
-    log.info("extraction: %d hit, %d miss", len(hits), len(misses))
-
-    # Page-type distribution
-    pt_counts: dict[str, int] = {}
-    for r in results:
-        pt = r.get("page_type")
-        if pt is not None:
-            pt_counts[pt] = pt_counts.get(pt, 0) + 1
-    log.info(
-        "page_type: roster=%d profile=%d other=%d",
-        pt_counts.get("roster", 0),
-        pt_counts.get("profile", 0),
-        pt_counts.get("other", 0),
-    )
-
-    # Miss reason breakdown
-    reasons: dict[str, int] = {}
-    for r in misses:
-        reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
-    for reason, count in sorted(reasons.items()):
-        log.info("  miss/%s: %d", reason, count)
-
-
-async def extract_one(
-    record: dict, sem: asyncio.Semaphore, fallback_position: str | None
-) -> dict:
-    """Extract holders from a single fetched record.
-
-    *fallback_position* fills in any holder whose position the model left blank.
+    ``row.position`` fills in any holder whose position the model left blank.
     """
-    async with sem:
-        out = {**record, "model": os.environ["OPENAI_MODEL"]}
+    snapshot = latest_snapshot(client, row.url)
+    if snapshot is None:
+        log.info("  skip %s — no snapshot", row.url)
+        return None
 
-        text = read_blob(record.get("plaintext")).decode("utf-8", errors="replace")
-        shot_path = record.get("screenshot")
-        screenshot_blob = read_blob(shot_path) if shot_path else None
-        if screenshot_blob is not None and is_blank(screenshot_blob):
-            screenshot_blob = None
+    out = {**snapshot, "model": os.environ["OPENAI_MODEL"]}
 
-        log.info("%s → extracting …", record["url"])
-        extraction, provenance = await extract(text, screenshot_blob)
-        holders = [holder.model_dump() for holder in extraction.holders]
-        for holder in holders:
-            if holder["position"] is None:
-                holder["position"] = fallback_position
-        status = "hit" if holders else "miss"
-        reason = None if holders else "no_holders"
+    text = read_blob(snapshot.get("plaintext")).decode("utf-8", errors="replace")
+    shot_path = snapshot.get("screenshot")
+    screenshot_blob = read_blob(shot_path) if shot_path else None
+    if screenshot_blob is not None and is_blank(screenshot_blob):
+        screenshot_blob = None
 
-        out.update(
-            status=status,
-            reason=reason,
-            page_type=extraction.page_type.value,
-            holders=holders,
-            provenance=provenance,
-        )
-        log.info(
-            "%s → %s (%d holder(s))",
-            record["url"],
-            status,
-            len(holders),
-        )
-        return out
+    log.info("%s → extracting …", snapshot["url"])
+    extraction, provenance = extract(text, screenshot_blob)
+    holders = [holder.model_dump() for holder in extraction.holders]
+    for holder in holders:
+        if holder["position"] is None:
+            holder["position"] = row.position
+    status = "hit" if holders else "miss"
+    reason = None if holders else "no_holders"
+
+    out.update(
+        status=status,
+        reason=reason,
+        page_type=extraction.page_type.value,
+        holders=holders,
+        provenance=provenance,
+    )
+    log.info(
+        "%s → %s (%d holder(s))",
+        snapshot["url"],
+        status,
+        len(holders),
+    )
+    return out
 
 
 # ===========================================================================
@@ -520,28 +452,45 @@ def snapshot_csv_cmd(csv_path: str, out_path: str, concurrency: int) -> None:
     default="data/extracted.jsonl",
     help="Output JSONL path.",
 )
-@click.option(
-    "--fetch-concurrency", type=int, default=10, help="Max concurrent Pravda requests."
-)
-@click.option(
-    "--extract-concurrency", type=int, default=5, help="Max concurrent LLM requests."
-)
-def extract_cmd(
-    csv_path: str,
-    sample: int | None,
-    out_path: str,
-    fetch_concurrency: int,
-    extract_concurrency: int,
-) -> None:
-    asyncio.run(
-        run_extract(
-            load_input(csv_path),
-            Path(out_path),
-            sample,
-            fetch_concurrency,
-            extract_concurrency,
-        )
+def extract_cmd(csv_path: str, sample: int | None, out_path: str) -> None:
+    rows = load_input(csv_path)
+    if sample is not None and sample < len(rows):
+        rows = random.sample(rows, sample)
+    log.info("%d URL(s) to extract", len(rows))
+
+    results: list[dict] = []
+    with httpx.Client(timeout=30) as client:
+        for row in rows:
+            result = extract_one(client, row)
+            if result is not None:
+                results.append(result)
+
+    write_jsonl(Path(out_path), results)
+    log.info("wrote %d record(s) → %s", len(results), out_path)
+
+    hits = [r for r in results if r["status"] == "hit"]
+    misses = [r for r in results if r["status"] == "miss"]
+    log.info("extraction: %d hit, %d miss", len(hits), len(misses))
+
+    # Page-type distribution
+    pt_counts: dict[str, int] = {}
+    for r in results:
+        pt = r.get("page_type")
+        if pt is not None:
+            pt_counts[pt] = pt_counts.get(pt, 0) + 1
+    log.info(
+        "page_type: roster=%d profile=%d other=%d",
+        pt_counts.get("roster", 0),
+        pt_counts.get("profile", 0),
+        pt_counts.get("other", 0),
     )
+
+    # Miss reason breakdown
+    reasons: dict[str, int] = {}
+    for r in misses:
+        reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
+    for reason, count in sorted(reasons.items()):
+        log.info("  miss/%s: %d", reason, count)
 
 
 if __name__ == "__main__":

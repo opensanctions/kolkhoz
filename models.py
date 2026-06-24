@@ -56,7 +56,9 @@ class Extraction(Base):
     __table_args__ = (UniqueConstraint("page_id", "snapshot_id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    page_id: Mapped[int] = mapped_column(ForeignKey("pages.id"), index=True)
+    page_id: Mapped[int] = mapped_column(
+        ForeignKey("pages.id", ondelete="CASCADE"), index=True
+    )
     # Pravda snapshot this extraction read from. The evidence.
     snapshot_id: Mapped[str]
     model: Mapped[str]
@@ -73,7 +75,9 @@ class Holder(Base):
     __tablename__ = "holders"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    extraction_id: Mapped[int] = mapped_column(ForeignKey("extractions.id"), index=True)
+    extraction_id: Mapped[int] = mapped_column(
+        ForeignKey("extractions.id", ondelete="CASCADE"), index=True
+    )
     human: Mapped[str]
     # May be null on the page; filled from Page.position at write time.
     position: Mapped[str | None]

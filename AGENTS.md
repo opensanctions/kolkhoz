@@ -5,7 +5,6 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 ## Project philosophy
 
 - Early-stage. No backward compatibility. No fallback behaviors. Fail loud: no `try/except` unless there's a specific reason. We want errors to surface immediately.
-- Quick and dirty scripts over frameworks. Iterate fast, throw things away. If two approaches exist, prefer the simpler one.
 
 ## Stack
 

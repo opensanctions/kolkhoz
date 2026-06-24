@@ -99,7 +99,16 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
 client = OpenAI()
 
 REASONING_EFFORT = "low"
-MAX_ROUNDS = 2
+
+# Content signals that force the full-page screenshot into the model
+# input. Below MIN_TEXT_WORDS the plaintext is too thin to read holders
+# from; with at least MIN_IMAGES and an imgs-per-word ratio over
+# MAX_IMG_DENSITY the page is image-dominated (org charts, headshot
+# rosters) and the names/titles are likely baked into the images rather
+# than the text. The decision is made in code, not by the model.
+MIN_TEXT_WORDS = 200
+MIN_IMAGES = 10
+MAX_IMG_DENSITY = 0.1
 
 INSTRUCTIONS = """\
 You extract political position holders from the content of a single web page.
@@ -120,29 +129,14 @@ Rules:
 - If the page names no position holders, return an empty list.
 - First, classify the page as `roster`, `profile`, or `other` (see field
   descriptions).
-- The page TEXT is given to you. The full-page SCREENSHOT is NOT included by
-  default. If the text is insufficient to read the holders — names appear to
-  be in images, the page is JS-rendered, or the text is too thin even to tell
-  what kind of page it is — call `get_screenshot` and then extract. Otherwise
-  do not call it; answer from the text.
+- The page TEXT is always given to you. The full-page SCREENSHOT is
+  attached as overlapping image tiles when the text alone looks
+  insufficient — too thin, or dominated by images that may carry
+  names/titles. When screenshot tiles are present, read them together
+  with the text as one page.
 - `page_type=other` should be used for generic pages (about, contact, article,
   landing) that are not in the business of listing position holders.
 """
-
-TOOLS = [
-    {
-        "type": "function",
-        "name": "get_screenshot",
-        "description": (
-            "Return the full-page screenshot of this page, tiled into overlapping squares. "
-            "Call this ONLY when the text alone is not enough to read the position holders — "
-            "for example the names seem to be in images, a JS-rendered org chart, or the text "
-            "is too thin to tell what the page is. Do NOT call it if the text already names "
-            "the holders, or if the page clearly has no roster."
-        ),
-        "parameters": {"type": "object", "properties": {}},
-    },
-]
 
 
 class Holder(BaseModel):
@@ -174,78 +168,36 @@ class Extraction(BaseModel):
     )
 
 
-def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[dict]]:
-    """Extract holders from one page.
+def extract(text: str, screenshot_blob: bytes | None) -> Extraction:
+    """Extract holders from a single page.
 
-    Always sends *text*. The model may pull the *screenshot* via the
-    ``get_screenshot`` tool.
+    Always sends the page *text*. When the content signals in the caller
+    fire, *screenshot_blob* is tiled and attached as overlapping image
+    parts alongside the text. There is no model-driven tool call: the
+    decision to include the screenshot is made in code from text length
+    and image density, not delegated to the model.
     """
-    # First turn: send the page text. The Responses API stores the turn
-    # server-side (store=True by default), so follow-up turns only need to
-    # pass ``previous_response_id`` plus the tool outputs — we never replay
-    # the assistant's function_call items ourselves.
+    parts: list[dict] = [{"type": "input_text", "text": text}]
+    if screenshot_blob is not None:
+        parts.extend(screenshot_parts(screenshot_blob))
+
     response = client.responses.parse(
         model=os.environ["OPENAI_MODEL"],
         instructions=INSTRUCTIONS,
-        input=[{"role": "user", "content": [{"type": "input_text", "text": text}]}],
-        tools=TOOLS,
+        input=[{"role": "user", "content": parts}],
         text_format=Extraction,
         reasoning={"effort": REASONING_EFFORT},
     )
-
-    for _ in range(MAX_ROUNDS):
-        # Each turn: log what the model did, then either settle on its
-        # final structured answer or resolve its tool calls and loop.
-        tool_calls = [o for o in response.output if o.type == "function_call"]
-        for tc in tool_calls:
-            log.info("  → tool call: %s", tc.name)
-        if not tool_calls:
-            log.info(
-                "  → final: %d holder(s), page_type=%s",
-                len(response.output_parsed.holders),
-                response.output_parsed.page_type.value,
-            )
-            return response.output_parsed
-
-        # Resolve each call by name, then hand the results back to the model.
-        outputs = [
-            {
-                "type": "function_call_output",
-                "call_id": tc.call_id,
-                "output": run_tool(tc.name, screenshot_blob),
-            }
-            for tc in tool_calls
-        ]
-        response = client.responses.parse(
-            model=os.environ["OPENAI_MODEL"],
-            previous_response_id=response.id,
-            input=outputs,
-            tools=TOOLS,
-            text_format=Extraction,
-            reasoning={"effort": REASONING_EFFORT},
-        )
-
-    raise RuntimeError("extraction loop exhausted without a final answer")
+    log.info(
+        "  → final: %d holder(s), page_type=%s",
+        len(response.output_parsed.holders),
+        response.output_parsed.page_type.value,
+    )
+    return response.output_parsed
 
 
-def run_tool(name: str, screenshot_blob: bytes | None):
-    """Dispatch a single tool call to its handler by *name*.
-
-    Returns the ``output`` value for a ``function_call_output`` item — either
-    a string or a list of input parts (text + images).
-    """
-    if name == "get_screenshot":
-        return screenshot_reply(screenshot_blob)
-    raise ValueError(f"unknown tool: {name!r}")
-
-
-def screenshot_reply(screenshot_blob: bytes | None):
-    """Build the model-facing reply for a ``get_screenshot`` call."""
-    if screenshot_blob is None:
-        # Can't fulfil the request. Tell the model so it can answer from
-        # text alone.
-        return "No screenshot is available for this page."
-
+def screenshot_parts(screenshot_blob: bytes) -> list[dict]:
+    """Tile a full-page screenshot into overlapping input parts for the model."""
     tile = int(os.environ["IMAGE_TILE_SIZE"])
     overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
     tiles = split_image(screenshot_blob, tile, overlap)
@@ -267,6 +219,26 @@ def screenshot_reply(screenshot_blob: bytes | None):
             for t in tiles
         ],
     ]
+
+
+def screenshot_reason(text: str, html: str) -> str | None:
+    """Return why the screenshot should be attached, or None to skip it.
+
+    Any one signal forces the screenshot into the model input:
+    - *thin text*: fewer than ``MIN_TEXT_WORDS`` words of plaintext, i.e.
+      the names/titles are unlikely to be in the text at all.
+    - *image-dense*: at least ``MIN_IMAGES`` images and an imgs-per-word
+      ratio above ``MAX_IMG_DENSITY``, i.e. the page is dominated by
+      images that likely carry the names/titles (org charts, headshot
+      rosters).
+    """
+    words = len(text.split())
+    imgs = html.count("<img")
+    if words < MIN_TEXT_WORDS:
+        return f"thin text ({words} words)"
+    if imgs >= MIN_IMAGES and imgs / words > MAX_IMG_DENSITY:
+        return f"image-dense ({imgs} imgs / {words} words)"
+    return None
 
 
 class InputRow(BaseModel):
@@ -470,15 +442,21 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                 )
                 continue
 
-            text = read_blob(snapshot.get("plaintext")).decode(
+            text = read_blob(snapshot["plaintext"]).decode("utf-8", errors="replace")
+            html = read_blob(snapshot["rendered_html"]).decode(
                 "utf-8", errors="replace"
             )
-            shot_path = snapshot.get("screenshot")
-            screenshot_blob = read_blob(shot_path) if shot_path else None
-            if screenshot_blob is not None and is_blank(screenshot_blob):
-                screenshot_blob = None
 
             log.info("%s → extracting …", snapshot["url"])
+            screenshot_blob = None
+            reason = screenshot_reason(text, html)
+            if reason is not None:
+                log.info("  → %s → including screenshot", reason)
+                shot_path = snapshot.get("screenshot")
+                if shot_path:
+                    blob = read_blob(shot_path)
+                    if not is_blank(blob):
+                        screenshot_blob = blob
             extraction = extract(text, screenshot_blob)
             holders = [h.model_dump() for h in extraction.holders]
             for holder in holders:

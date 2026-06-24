@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.4.1",
+    "followthemoney>=4.9.2",
     "httpx>=0.28.1",
     "openai>=2.41.1",
     "pillow>=12.2.0",

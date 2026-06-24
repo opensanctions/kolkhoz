@@ -7,6 +7,8 @@ Orchestrates Pravda web capture and LLM extraction into a single CLI:
 - ``extract``        read pages from the database, fetch the latest Pravda
                       snapshot for each, run an LLM extraction step, and store
                       the results in the database
+- ``export-ftm``     export the extracted holders to a Followthemoney
+                      (followthemoney.tech) entity stream
 """
 
 import asyncio
@@ -22,11 +24,12 @@ from pathlib import Path
 import click
 import httpx
 from dotenv import load_dotenv
+from followthemoney import model as ftm_model
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from models import Base, PageType
@@ -388,6 +391,121 @@ def extract_one(
 
 
 # ===========================================================================
+# Followthemoney export — maps the extracted holders onto FtM's native
+# model for political position holders: each institute becomes an
+# Organization, each (institute, position) pair a Position held by a Person
+# via an Occupancy. The Pravda snapshot an extraction read from becomes a
+# Document that stands as proof.
+# ===========================================================================
+
+
+# Topic applied to every political-position-holder entity we emit. FtM uses
+# the "gov" topic for government / public-office related subjects.
+GOV_TOPIC = "gov"
+
+
+def _merge(bucket: dict[str, dict], proxy: dict) -> None:
+    """Fold *proxy* into *bucket* keyed by entity id, merging on collision.
+
+    Followthemoney entities that share an id (e.g. the same Person appearing
+    on several pages) are merged so each entity is emitted once with the
+    union of its property values.
+    """
+    existing = bucket.get(proxy["id"])
+    if existing is None:
+        bucket[proxy["id"]] = proxy
+    else:
+        bucket[proxy["id"]] = (
+            ftm_model.get_proxy(existing).merge(ftm_model.get_proxy(proxy)).to_dict()
+        )
+
+
+def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
+    """Build a list of Followthemoney entity dicts from the database.
+
+    Emits Organization, Position, Person, Occupancy, and Document entities,
+    deduplicated and merged by id. Only the latest extraction per page is
+    exported, so re-running extraction doesn't multiply the output.
+    """
+    bucket: dict[str, dict] = {}
+
+    # The latest Extraction per page: we only export the most recent read of
+    # each page, so re-running extraction doesn't multiply the output.
+    latest = (
+        select(
+            ExtractionRow.page_id.label("page_id"),
+            func.max(ExtractionRow.id).label("extraction_id"),
+        )
+        .group_by(ExtractionRow.page_id)
+        .subquery()
+    )
+    stmt = (
+        select(HolderRow, ExtractionRow, PageRow)
+        .join(latest, HolderRow.extraction_id == latest.c.extraction_id)
+        .join(ExtractionRow, HolderRow.extraction_id == ExtractionRow.id)
+        .join(PageRow, ExtractionRow.page_id == PageRow.id)
+    )
+    if dataset is not None:
+        stmt = stmt.where(PageRow.dataset == dataset)
+    rows = session.execute(stmt).all()
+
+    for holder, extraction, page in rows:
+        # --- Organization: the institute the page is about. ---
+        org = ftm_model.make_entity("Organization")
+        org.make_id("org", page.dataset, page.institute)
+        org.add("name", page.institute)
+        org.add("website", page.url)
+        org.add("topics", GOV_TOPIC)
+        _merge(bucket, org.to_dict())
+
+        # --- Document: the Pravda snapshot this holder was read from. ---
+        doc = ftm_model.make_entity("Document")
+        doc.make_id("pravda", extraction.snapshot_id)
+        doc.add("title", page.url)
+        doc.add("sourceUrl", page.url)
+        doc.add("notes", f"Pravda snapshot {extraction.snapshot_id}")
+        doc.add("author", extraction.model)
+        _merge(bucket, doc.to_dict())
+
+        # --- Person: the named human. ---
+        person = ftm_model.make_entity("Person")
+        person.make_id("person", page.dataset, holder.human)
+        person.add("name", holder.human)
+        person.add("topics", GOV_TOPIC)
+        person.add("sourceUrl", page.url)
+        person.add("proof", doc.id)
+        _merge(bucket, person.to_dict())
+
+        # When the page names a person but no title, we cannot place them in
+        # a Position, so we stop after emitting the Person.
+        position_title = holder.position or page.position
+        if position_title is None:
+            continue
+
+        # --- Position: the (institute, title) role. ---
+        position = ftm_model.make_entity("Position")
+        position.make_id("position", org.id, position_title)
+        position.add("name", position_title)
+        position.add("organization", org.id)
+        position.add("topics", GOV_TOPIC)
+        position.add("sourceUrl", page.url)
+        _merge(bucket, position.to_dict())
+
+        # --- Occupancy: this person holding this position. ---
+        occupancy = ftm_model.make_entity("Occupancy")
+        occupancy.make_id("occupancy", person.id, position.id)
+        occupancy.add("holder", person.id)
+        occupancy.add("post", position.id)
+        occupancy.add("status", "current")
+        occupancy.add("date", extraction.extracted_at.date().isoformat())
+        occupancy.add("sourceUrl", page.url)
+        occupancy.add("proof", doc.id)
+        _merge(bucket, occupancy.to_dict())
+
+    return list(bucket.values())
+
+
+# ===========================================================================
 # CLI
 # ===========================================================================
 
@@ -482,6 +600,38 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
         pt_counts.get("profile", 0),
         pt_counts.get("other", 0),
     )
+
+
+@cli.command(
+    "export-ftm",
+    help=(
+        "Export extracted holders to a Followthemoney "
+        "(followthemoney.tech) entity stream. Writes one JSON entity per "
+        "line (the ijson stream format used by the `ftm` CLI) to the "
+        "output file, or stdout if none is given."
+    ),
+)
+@click.option(
+    "-d", "--dataset", type=str, default=None, help="Only export this dataset."
+)
+@click.option(
+    "-o",
+    "--output",
+    type=click.File("w"),
+    default="-",
+    help="Output file (default: stdout).",
+)
+def export_ftm_cmd(dataset: str | None, output) -> None:
+    import json
+
+    with Session() as session:
+        entities = build_ftm_entities(session, dataset)
+
+    for entity in entities:
+        output.write(json.dumps(entity, ensure_ascii=False))
+        output.write("\n")
+    output.flush()
+    log.info("exported %d entit(ies)", len(entities))
 
 
 if __name__ == "__main__":

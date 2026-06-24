@@ -4,9 +4,9 @@ Orchestrates Pravda web capture and LLM extraction into a single CLI:
 
 - ``snapshot-url``   snapshot a single URL through Pravda
 - ``snapshot-csv``   snapshot all URLs from a CSV through Pravda
-- ``extract``        read a CSV of URLs, fetch the latest Pravda snapshot for
-                      each, run an LLM extraction step, and write the results
-                      to data/<csv-stem>.extracted.jsonl
+- ``extract``        read pages from the database, fetch the latest Pravda
+                      snapshot for each, run an LLM extraction step, and store
+                      the results in the database
 """
 
 import asyncio
@@ -349,18 +349,18 @@ async def run_snapshot_csv(
 
 
 def extract_one(
-    client: httpx.Client, row: InputRow
+    client: httpx.Client, page: PageRow
 ) -> tuple[str, PageType, list[dict]] | None:
-    """Fetch the latest snapshot for *row* and extract holders from it.
+    """Fetch the latest snapshot for *page* and extract holders from it.
 
     Returns ``(snapshot_id, page_type, holders)`` or None if Pravda has no
     snapshot for the URL.
 
-    ``row.position`` fills in any holder whose position the model left blank.
+    ``page.position`` fills in any holder whose position the model left blank.
     """
-    snapshot = latest_snapshot(client, row.url)
+    snapshot = latest_snapshot(client, page.url)
     if snapshot is None:
-        log.info("  skip %s — no snapshot", row.url)
+        log.info("  skip %s — no snapshot", page.url)
         return None
 
     text = read_blob(snapshot.get("plaintext")).decode("utf-8", errors="replace")
@@ -374,7 +374,7 @@ def extract_one(
     holders = [holder.model_dump() for holder in extraction.holders]
     for holder in holders:
         if holder["position"] is None:
-            holder["position"] = row.position
+            holder["position"] = page.position
     log.info("%s → %d holder(s)", snapshot["url"], len(holders))
     return snapshot["id"], extraction.page_type, holders
 
@@ -410,28 +410,35 @@ def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
 @cli.command(
     "extract",
     help=(
-        "Read a CSV of URLs, fetch the latest Pravda snapshot for each, run an "
-        "LLM extraction step, and write the results to "
-        "data/<csv-stem>.extracted.jsonl."
+        "Read pages from the database, fetch the latest Pravda snapshot for "
+        "each, run an LLM extraction step, and store the results in the "
+        "database."
     ),
 )
-@click.argument("csv_path", type=click.Path(exists=True))
-@click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
-def extract_cmd(csv_path: str, sample: int | None) -> None:
-    dataset = Path(csv_path).stem
+@click.option(
+    "-d", "--dataset", type=str, default=None, help="Only extract this dataset."
+)
+@click.option("-n", "--sample", type=int, default=None, help="Randomly sample N pages.")
+def extract_cmd(dataset: str | None, sample: int | None) -> None:
     Path(os.environ["KOLKHOZ_DB"]).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
-    rows = load_input(csv_path)
-    if sample is not None and sample < len(rows):
-        rows = random.sample(rows, sample)
-    log.info("%d URL(s) to extract", len(rows))
+
+    with Session() as session:
+        query = session.query(PageRow)
+        if dataset is not None:
+            query = query.filter_by(dataset=dataset)
+        pages = query.all()
+
+    if sample is not None and sample < len(pages):
+        pages = random.sample(pages, sample)
+    log.info("%d page(s) to extract", len(pages))
 
     n = 0
     hits = 0
     pt_counts: dict[str, int] = {}
     with Session() as session, httpx.Client(timeout=30) as client:
-        for row in rows:
-            result = extract_one(client, row)
+        for page in pages:
+            result = extract_one(client, page)
             if result is None:
                 continue
             snapshot_id, page_type, holders = result
@@ -440,16 +447,9 @@ def extract_cmd(csv_path: str, sample: int | None) -> None:
                 hits += 1
             pt_counts[page_type.value] = pt_counts.get(page_type.value, 0) + 1
 
-            page = session.query(PageRow).filter_by(url=row.url).first()
-            if page is None:
-                page = PageRow(
-                    url=row.url,
-                    institute=row.institute,
-                    position=row.position,
-                    dataset=dataset,
-                )
-                session.add(page)
-                session.flush()
+            # Re-attach the page to this session (it was loaded above in a
+            # different, now-closed session).
+            page = session.merge(page)
 
             existing = (
                 session.query(ExtractionRow)
@@ -459,7 +459,7 @@ def extract_cmd(csv_path: str, sample: int | None) -> None:
             if existing is not None:
                 log.info(
                     "  skip %s — already extracted for snapshot %s",
-                    row.url,
+                    page.url,
                     snapshot_id,
                 )
                 continue

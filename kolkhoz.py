@@ -37,8 +37,7 @@ from models import Page as PageRow
 
 load_dotenv()
 
-DB_PATH = os.environ.get("KOLKHOZ_DB", "data/kolkhoz.db")
-engine = create_engine(f"sqlite:///{DB_PATH}")
+engine = create_engine(f"sqlite:///{os.environ['KOLKHOZ_DB']}")
 Session = sessionmaker(engine)
 
 log = logging.getLogger("kolkhoz")
@@ -426,7 +425,7 @@ def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
 @click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
 def extract_cmd(csv_path: str, sample: int | None) -> None:
     dataset = Path(csv_path).stem
-    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Path(os.environ["KOLKHOZ_DB"]).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
     rows = load_input(csv_path)
     if sample is not None and sample < len(rows):
@@ -486,9 +485,7 @@ def extract_cmd(csv_path: str, sample: int | None) -> None:
 
         session.commit()
 
-    log.info(
-        "wrote %d record(s) → %s", n, os.environ.get("KOLKHOZ_DB", "data/kolkhoz.db")
-    )
+    log.info("wrote %d record(s) → %s", n, os.environ["KOLKHOZ_DB"])
     log.info("extraction: %d hit, %d miss", hits, n - hits)
     log.info(
         "page_type: roster=%d profile=%d other=%d",

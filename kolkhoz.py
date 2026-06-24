@@ -12,6 +12,7 @@ import click
 import httpx
 from dotenv import load_dotenv
 from followthemoney import model as ftm_model
+from followthemoney.proxy import EntityProxy
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -355,22 +356,6 @@ async def run_snapshot_csv(
 # ===========================================================================
 
 
-def _merge(bucket: dict[str, dict], proxy: dict) -> None:
-    """Fold *proxy* into *bucket* keyed by entity id, merging on collision.
-
-    Followthemoney entities that share an id (e.g. the same Person appearing
-    on several pages) are merged so each entity is emitted once with the
-    union of its property values.
-    """
-    existing = bucket.get(proxy["id"])
-    if existing is None:
-        bucket[proxy["id"]] = proxy
-    else:
-        bucket[proxy["id"]] = (
-            ftm_model.get_proxy(existing).merge(ftm_model.get_proxy(proxy)).to_dict()
-        )
-
-
 def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
     """Build a list of Followthemoney entity dicts from the database.
 
@@ -378,7 +363,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
     deduplicated and merged by id. Only the latest extraction per page is
     exported, so re-running extraction doesn't multiply the output.
     """
-    bucket: dict[str, dict] = {}
+    bucket: dict[str, EntityProxy] = {}
 
     # The latest Extraction per page: we only export the most recent read of
     # each page, so re-running extraction doesn't multiply the output.
@@ -406,7 +391,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         org.make_id("org", page.dataset, page.institute)
         org.add("name", page.institute)
         org.add("website", page.url)
-        _merge(bucket, org.to_dict())
+        bucket[org.id] = bucket.get(org.id, org).merge(org)
 
         # --- Document: the Pravda snapshot this holder was read from. ---
         doc = ftm_model.make_entity("Document")
@@ -415,7 +400,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         doc.add("sourceUrl", page.url)
         doc.add("notes", f"Pravda snapshot {extraction.snapshot_id}")
         doc.add("author", extraction.model)
-        _merge(bucket, doc.to_dict())
+        bucket[doc.id] = bucket.get(doc.id, doc).merge(doc)
 
         # --- Person: the named human. ---
         person = ftm_model.make_entity("Person")
@@ -423,7 +408,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         person.add("name", holder.human)
         person.add("sourceUrl", page.url)
         person.add("proof", doc.id)
-        _merge(bucket, person.to_dict())
+        bucket[person.id] = bucket.get(person.id, person).merge(person)
 
         # --- Position: the (institute, title) role. ---
         position_title = holder.position or page.position
@@ -432,7 +417,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         position.add("name", position_title)
         position.add("organization", org.id)
         position.add("sourceUrl", page.url)
-        _merge(bucket, position.to_dict())
+        bucket[position.id] = bucket.get(position.id, position).merge(position)
 
         # --- Occupancy: this person holding this position. ---
         occupancy = ftm_model.make_entity("Occupancy")
@@ -443,9 +428,9 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         occupancy.add("date", extraction.extracted_at.date().isoformat())
         occupancy.add("sourceUrl", page.url)
         occupancy.add("proof", doc.id)
-        _merge(bucket, occupancy.to_dict())
+        bucket[occupancy.id] = bucket.get(occupancy.id, occupancy).merge(occupancy)
 
-    return list(bucket.values())
+    return [entity.to_dict() for entity in bucket.values()]
 
 
 # ===========================================================================

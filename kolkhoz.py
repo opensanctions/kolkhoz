@@ -400,10 +400,10 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
 
 @click.group()
 def cli() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
-    )
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(logging.FileHandler("kolkhoz.log"))
+    root.addHandler(logging.StreamHandler())
 
 
 @cli.command("snapshot-csv", help="Snapshot all URLs from a CSV through Pravda.")

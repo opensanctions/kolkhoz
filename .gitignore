@@ -9,3 +9,4 @@ wheels/
 CLAUDE.md
 *.db
 *.db-journal
+*.log

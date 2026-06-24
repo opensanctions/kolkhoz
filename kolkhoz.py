@@ -189,7 +189,15 @@ class Holder(BaseModel):
 
 
 class Extraction(BaseModel):
-    page_type: PageType = Field(description="The kind of page this is.")
+    page_type: PageType = Field(
+        description=(
+            "The kind of page this is. "
+            "`roster` lists multiple named position holders. "
+            "`profile` is a single person's page about themselves. "
+            "`other` is a page that is not in the business of listing "
+            "position holders."
+        )
+    )
     holders: list[Holder] = Field(
         description="Position holders found on the page. Empty if none."
     )
@@ -450,19 +458,6 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
             # Re-attach the page to this session (it was loaded above in a
             # different, now-closed session).
             page = session.merge(page)
-
-            existing = (
-                session.query(ExtractionRow)
-                .filter_by(page_id=page.id, snapshot_id=snapshot_id)
-                .first()
-            )
-            if existing is not None:
-                log.info(
-                    "  skip %s — already extracted for snapshot %s",
-                    page.url,
-                    snapshot_id,
-                )
-                continue
 
             extraction_row = ExtractionRow(
                 page_id=page.id,

@@ -33,24 +33,12 @@ Session = sessionmaker(engine)
 log = logging.getLogger("kolkhoz")
 
 
-# ===========================================================================
-# Pravda snapshotting
-# ===========================================================================
-
-
 async def async_snapshot_url(url: str, sem: asyncio.Semaphore) -> dict:
     async with sem, httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             f"{os.environ['PRAVDA_URL']}/snapshots", json={"url": url}
         )
         return resp.json()
-
-
-# ===========================================================================
-# Pravda read helpers — read captured blobs straight off Pravda's
-# content-addressed storage (the API returns file paths; we read them
-# directly, as Pravda intends).
-# ===========================================================================
 
 
 def latest_snapshot(client: httpx.Client, url: str) -> dict | None:
@@ -107,14 +95,6 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
         tiles.append(buf.getvalue())
     return tiles
 
-
-# ===========================================================================
-# LLM extraction — always sends the rendered page *text* to the model, and
-# exposes a ``get_screenshot`` function tool so the model can pull the
-# full-page screenshot (tiled into overlapping squares) only when the text is
-# insufficient. Uses the OpenAI Responses API with structured outputs and low
-# reasoning effort.
-# ===========================================================================
 
 client = OpenAI()
 
@@ -213,14 +193,18 @@ def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[
         reasoning={"effort": REASONING_EFFORT},
     )
 
-    for _ in range(MAX_ROUNDS - 1):
+    for _ in range(MAX_ROUNDS):
+        # Each turn: log what the model did, then either settle on its
+        # final structured answer or resolve its tool calls and loop.
         tool_calls = [o for o in response.output if o.type == "function_call"]
+        for tc in tool_calls:
+            log.info("  → tool call: %s", tc.name)
         if not tool_calls:
-            # No tool call -> final structured answer.
-            if response.output_parsed is None:
-                raise ValueError(
-                    f"Model returned no parsed output (possible refusal): {response.output}"
-                )
+            log.info(
+                "  → final: %d holder(s), page_type=%s",
+                len(response.output_parsed.holders),
+                response.output_parsed.page_type.value,
+            )
             return response.output_parsed
 
         # Resolve each call by name, then hand the results back to the model.
@@ -285,11 +269,6 @@ def screenshot_reply(screenshot_blob: bytes | None):
     ]
 
 
-# ===========================================================================
-# CSV helpers
-# ===========================================================================
-
-
 class InputRow(BaseModel):
     """One row of the input CSV: a URL plus its known metadata."""
 
@@ -311,11 +290,6 @@ def load_input(path: str) -> list[InputRow]:
             for row in reader
             if row["url"].strip() and row["position"].strip()
         ]
-
-
-# ===========================================================================
-# Core pipelines
-# ===========================================================================
 
 
 async def run_snapshot_csv(
@@ -345,15 +319,6 @@ async def run_snapshot_csv(
                 )
         session.commit()
     log.info("wrote %d page(s) → %s", len(rows), os.environ["KOLKHOZ_DB"])
-
-
-# ===========================================================================
-# Followthemoney export — maps the extracted holders onto FtM's native
-# model for political position holders: each institute becomes an
-# Organization, each (institute, position) pair a Position held by a Person
-# via an Occupancy. The Pravda snapshot an extraction read from becomes a
-# Document that stands as proof.
-# ===========================================================================
 
 
 def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
@@ -431,11 +396,6 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         bucket[occupancy.id] = bucket.get(occupancy.id, occupancy).merge(occupancy)
 
     return [entity.to_dict() for entity in bucket.values()]
-
-
-# ===========================================================================
-# CLI
-# ===========================================================================
 
 
 @click.group()

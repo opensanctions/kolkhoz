@@ -346,37 +346,6 @@ async def run_snapshot_csv(
     log.info("wrote %d page(s) → %s", len(rows), os.environ["KOLKHOZ_DB"])
 
 
-def extract_one(
-    client: httpx.Client, page: PageRow
-) -> tuple[str, PageType, list[dict]] | None:
-    """Fetch the latest snapshot for *page* and extract holders from it.
-
-    Returns ``(snapshot_id, page_type, holders)`` or None if Pravda has no
-    snapshot for the URL.
-
-    ``page.position`` fills in any holder whose position the model left blank.
-    """
-    snapshot = latest_snapshot(client, page.url)
-    if snapshot is None:
-        log.info("  skip %s — no snapshot", page.url)
-        return None
-
-    text = read_blob(snapshot.get("plaintext")).decode("utf-8", errors="replace")
-    shot_path = snapshot.get("screenshot")
-    screenshot_blob = read_blob(shot_path) if shot_path else None
-    if screenshot_blob is not None and is_blank(screenshot_blob):
-        screenshot_blob = None
-
-    log.info("%s → extracting …", snapshot["url"])
-    extraction = extract(text, screenshot_blob)
-    holders = [holder.model_dump() for holder in extraction.holders]
-    for holder in holders:
-        if holder["position"] is None:
-            holder["position"] = page.position
-    log.info("%s → %d holder(s)", snapshot["url"], len(holders))
-    return snapshot["id"], extraction.page_type, holders
-
-
 # ===========================================================================
 # Followthemoney export — maps the extracted holders onto FtM's native
 # model for political position holders: each institute becomes an
@@ -384,11 +353,6 @@ def extract_one(
 # via an Occupancy. The Pravda snapshot an extraction read from becomes a
 # Document that stands as proof.
 # ===========================================================================
-
-
-# Topic applied to every political-position-holder entity we emit. FtM uses
-# the "gov" topic for government / public-office related subjects.
-GOV_TOPIC = "gov"
 
 
 def _merge(bucket: dict[str, dict], proxy: dict) -> None:
@@ -442,7 +406,6 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         org.make_id("org", page.dataset, page.institute)
         org.add("name", page.institute)
         org.add("website", page.url)
-        org.add("topics", GOV_TOPIC)
         _merge(bucket, org.to_dict())
 
         # --- Document: the Pravda snapshot this holder was read from. ---
@@ -458,7 +421,6 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         person = ftm_model.make_entity("Person")
         person.make_id("person", page.dataset, holder.human)
         person.add("name", holder.human)
-        person.add("topics", GOV_TOPIC)
         person.add("sourceUrl", page.url)
         person.add("proof", doc.id)
         _merge(bucket, person.to_dict())
@@ -469,7 +431,6 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         position.make_id("position", org.id, position_title)
         position.add("name", position_title)
         position.add("organization", org.id)
-        position.add("topics", GOV_TOPIC)
         position.add("sourceUrl", page.url)
         _merge(bucket, position.to_dict())
 
@@ -546,14 +507,46 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
     pt_counts: dict[str, int] = {}
     with Session() as session, httpx.Client(timeout=30) as client:
         for page in pages:
-            result = extract_one(client, page)
-            if result is None:
+            snapshot = latest_snapshot(client, page.url)
+            if snapshot is None:
+                log.info("  skip %s — no snapshot", page.url)
                 continue
-            snapshot_id, page_type, holders = result
+
+            already = (
+                session.query(ExtractionRow)
+                .filter_by(page_id=page.id, snapshot_id=snapshot["id"])
+                .first()
+            )
+            if already is not None:
+                log.info(
+                    "  skip %s — snapshot %s already extracted",
+                    page.url,
+                    snapshot["id"],
+                )
+                continue
+
+            text = read_blob(snapshot.get("plaintext")).decode(
+                "utf-8", errors="replace"
+            )
+            shot_path = snapshot.get("screenshot")
+            screenshot_blob = read_blob(shot_path) if shot_path else None
+            if screenshot_blob is not None and is_blank(screenshot_blob):
+                screenshot_blob = None
+
+            log.info("%s → extracting …", snapshot["url"])
+            extraction = extract(text, screenshot_blob)
+            holders = [h.model_dump() for h in extraction.holders]
+            for holder in holders:
+                if holder["position"] is None:
+                    holder["position"] = page.position
+            log.info("%s → %d holder(s)", snapshot["url"], len(holders))
+
             n += 1
             if holders:
                 hits += 1
-            pt_counts[page_type.value] = pt_counts.get(page_type.value, 0) + 1
+            pt_counts[extraction.page_type.value] = (
+                pt_counts.get(extraction.page_type.value, 0) + 1
+            )
 
             # Re-attach the page to this session (it was loaded above in a
             # different, now-closed session).
@@ -561,10 +554,10 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
 
             extraction_row = ExtractionRow(
                 page_id=page.id,
-                snapshot_id=snapshot_id,
+                snapshot_id=snapshot["id"],
                 model=os.environ["OPENAI_MODEL"],
                 extracted_at=datetime.now(),
-                page_type=page_type,
+                page_type=extraction.page_type,
             )
             for h in holders:
                 extraction_row.holders.append(

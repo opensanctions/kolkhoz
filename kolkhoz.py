@@ -110,7 +110,7 @@ MIN_TEXT_WORDS = 200
 MIN_IMAGES = 10
 MAX_IMG_DENSITY = 0.1
 
-INSTRUCTIONS = """\
+_INSTRUCTIONS_HEAD = """\
 You extract political position holders from the content of a single web page.
 
 A "holder" is a specific, named human who holds a named position (office, seat,
@@ -120,22 +120,14 @@ board director, judge, minister, or chair.
 Rules:
 - Return one entry per (human, position) pair. If one person holds two
   positions, return two entries.
-- Use the person's full name exactly as written on the page.
-- Use the most specific position title shown. If the page is about an
-  organisation and the title omits it, you may name the body (e.g. "Council
-  Member").
-- Do not invent people. Only extract humans actually named on the page.
+- Only extract humans actually named on the page. Do not invent people.
 - Ignore names that are not position holders (authors, contacts, mentions).
-- If the page names no position holders, return an empty list.
-- First, classify the page as `roster`, `profile`, or `other` (see field
-  descriptions).
-- The page TEXT is always given to you. The full-page SCREENSHOT is
-  attached as overlapping image tiles when the text alone looks
-  insufficient — too thin, or dominated by images that may carry
-  names/titles. When screenshot tiles are present, read them together
-  with the text as one page.
-- `page_type=other` should be used for generic pages (about, contact, article,
-  landing) that are not in the business of listing position holders.
+"""
+
+_INSTRUCTIONS_WITH_SCREENSHOT = """\
+- The full-page screenshot is attached as overlapping image tiles. Read the
+  tiles together with the text as one page. Tiles overlap, so the same
+  person/position may recur — extract each holder once.
 """
 
 
@@ -147,8 +139,10 @@ class Holder(BaseModel):
         default=None,
         description=(
             "Specific position title the person holds, e.g. 'Council Member'. "
-            "Omit (null) only if the page names the person but states no specific "
-            "title for them."
+            "Use the most specific title shown; if the page is about an "
+            "organisation and the title omits it, you may name the body. "
+            "Omit (null) only if the page names the person but states no "
+            "specific title for them."
         ),
     )
 
@@ -159,8 +153,8 @@ class Extraction(BaseModel):
             "The kind of page this is. "
             "`roster` lists multiple named position holders. "
             "`profile` is a single person's page about themselves. "
-            "`other` is a page that is not in the business of listing "
-            "position holders."
+            "`other` is for generic pages (about, contact, article, landing) "
+            "that are not in the business of listing position holders."
         )
     )
     holders: list[Holder] = Field(
@@ -183,7 +177,8 @@ def extract(text: str, screenshot_blob: bytes | None) -> Extraction:
 
     response = client.responses.parse(
         model=os.environ["OPENAI_MODEL"],
-        instructions=INSTRUCTIONS,
+        instructions=_INSTRUCTIONS_HEAD
+        + (_INSTRUCTIONS_WITH_SCREENSHOT if screenshot_blob is not None else ""),
         input=[{"role": "user", "content": parts}],
         text_format=Extraction,
         reasoning={"effort": REASONING_EFFORT},

@@ -17,7 +17,6 @@ import json
 import logging
 import os
 import random
-from enum import Enum
 from pathlib import Path
 
 import click
@@ -26,6 +25,8 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
+
+from models import PageType
 
 load_dotenv()
 
@@ -162,12 +163,6 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {}},
     },
 ]
-
-
-class PageType(str, Enum):
-    roster = "roster"  # page that lists named position holders (board, council, staff, directory)
-    profile = "profile"  # a single person's bio / CV / appointment page
-    other = "other"  # about/contact/landing/article — not expected to list holders
 
 
 class Holder(BaseModel):

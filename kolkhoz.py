@@ -45,8 +45,9 @@ def latest_snapshot(client: httpx.Client, url: str) -> dict | None:
     """Return the most recent snapshot for *url*, or None if there are none."""
     resp = client.get(f"{os.environ['PRAVDA_URL']}/snapshots", params={"url": url})
     resp.raise_for_status()
-    items = resp.json().get("items", [])
-    return items[0] if items else None  # the API returns newest first
+    # The API returns newest first; ignore snapshots that errored during capture.
+    items = [i for i in resp.json().get("items", []) if i.get("error") is None]
+    return items[0] if items else None
 
 
 def read_blob(path: str) -> bytes:

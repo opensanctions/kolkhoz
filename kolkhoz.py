@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import random
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -26,9 +27,19 @@ from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from models import PageType
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from models import Base, PageType
+from models import Extraction as ExtractionRow
+from models import Holder as HolderRow
+from models import Page as PageRow
 
 load_dotenv()
+
+DB_PATH = os.environ.get("KOLKHOZ_DB", "data/kolkhoz.db")
+engine = create_engine(f"sqlite:///{DB_PATH}")
+Session = sessionmaker(engine)
 
 log = logging.getLogger("kolkhoz")
 
@@ -345,10 +356,13 @@ async def run_snapshot_csv(
     log.info("wrote %d snapshot(s) → %s", len(results), out_path)
 
 
-def extract_one(client: httpx.Client, row: InputRow) -> dict | None:
+def extract_one(
+    client: httpx.Client, row: InputRow
+) -> tuple[str, PageType, list[dict]] | None:
     """Fetch the latest snapshot for *row* and extract holders from it.
 
-    Returns None if Pravda has no snapshot for the URL.
+    Returns ``(snapshot_id, page_type, holders)`` or None if Pravda has no
+    snapshot for the URL.
 
     ``row.position`` fills in any holder whose position the model left blank.
     """
@@ -356,8 +370,6 @@ def extract_one(client: httpx.Client, row: InputRow) -> dict | None:
     if snapshot is None:
         log.info("  skip %s — no snapshot", row.url)
         return None
-
-    out = {**snapshot, "model": os.environ["OPENAI_MODEL"]}
 
     text = read_blob(snapshot.get("plaintext")).decode("utf-8", errors="replace")
     shot_path = snapshot.get("screenshot")
@@ -371,12 +383,8 @@ def extract_one(client: httpx.Client, row: InputRow) -> dict | None:
     for holder in holders:
         if holder["position"] is None:
             holder["position"] = row.position
-    out.update(
-        page_type=extraction.page_type.value,
-        holders=holders,
-    )
     log.info("%s → %d holder(s)", snapshot["url"], len(holders))
-    return out
+    return snapshot["id"], extraction.page_type, holders
 
 
 # ===========================================================================
@@ -417,32 +425,71 @@ def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
 @click.argument("csv_path", type=click.Path(exists=True))
 @click.option("-n", "--sample", type=int, default=None, help="Randomly sample N URLs.")
 def extract_cmd(csv_path: str, sample: int | None) -> None:
-    out_path = default_out_path(csv_path, "extracted")
+    dataset = Path(csv_path).stem
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(engine)
     rows = load_input(csv_path)
     if sample is not None and sample < len(rows):
         rows = random.sample(rows, sample)
     log.info("%d URL(s) to extract", len(rows))
 
-    results: list[dict] = []
-    with httpx.Client(timeout=30) as client:
+    n = 0
+    hits = 0
+    pt_counts: dict[str, int] = {}
+    with Session() as session, httpx.Client(timeout=30) as client:
         for row in rows:
             result = extract_one(client, row)
-            if result is not None:
-                results.append(result)
+            if result is None:
+                continue
+            snapshot_id, page_type, holders = result
+            n += 1
+            if holders:
+                hits += 1
+            pt_counts[page_type.value] = pt_counts.get(page_type.value, 0) + 1
 
-    write_jsonl(out_path, results)
-    log.info("wrote %d record(s) → %s", len(results), out_path)
+            page = session.query(PageRow).filter_by(url=row.url).first()
+            if page is None:
+                page = PageRow(
+                    url=row.url,
+                    institute=row.institute,
+                    position=row.position,
+                    dataset=dataset,
+                )
+                session.add(page)
+                session.flush()
 
-    hits = sum(1 for r in results if r["holders"])
-    misses = len(results) - hits
-    log.info("extraction: %d hit, %d miss", hits, misses)
+            existing = (
+                session.query(ExtractionRow)
+                .filter_by(page_id=page.id, snapshot_id=snapshot_id)
+                .first()
+            )
+            if existing is not None:
+                log.info(
+                    "  skip %s — already extracted for snapshot %s",
+                    row.url,
+                    snapshot_id,
+                )
+                continue
 
-    # Page-type distribution
-    pt_counts: dict[str, int] = {}
-    for r in results:
-        pt = r.get("page_type")
-        if pt is not None:
-            pt_counts[pt] = pt_counts.get(pt, 0) + 1
+            extraction_row = ExtractionRow(
+                page_id=page.id,
+                snapshot_id=snapshot_id,
+                model=os.environ["OPENAI_MODEL"],
+                extracted_at=datetime.now(),
+                page_type=page_type,
+            )
+            for h in holders:
+                extraction_row.holders.append(
+                    HolderRow(human=h["human"], position=h["position"])
+                )
+            session.add(extraction_row)
+
+        session.commit()
+
+    log.info(
+        "wrote %d record(s) → %s", n, os.environ.get("KOLKHOZ_DB", "data/kolkhoz.db")
+    )
+    log.info("extraction: %d hit, %d miss", hits, n - hits)
     log.info(
         "page_type: roster=%d profile=%d other=%d",
         pt_counts.get("roster", 0),

@@ -197,27 +197,21 @@ def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[
     Always sends *text*. The model may pull the *screenshot* via the
     ``get_screenshot`` tool.
     """
-    tile = int(os.environ["IMAGE_TILE_SIZE"])
-    overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
+    # First turn: send the page text. The Responses API stores the turn
+    # server-side (store=True by default), so follow-up turns only need to
+    # pass ``previous_response_id`` plus the tool outputs — we never replay
+    # the assistant's function_call items ourselves.
+    response = client.responses.parse(
+        model=os.environ["OPENAI_MODEL"],
+        instructions=INSTRUCTIONS,
+        input=[{"role": "user", "content": [{"type": "input_text", "text": text}]}],
+        tools=TOOLS,
+        text_format=Extraction,
+        reasoning={"effort": REASONING_EFFORT},
+    )
 
-    input_items = [{"role": "user", "content": [{"type": "input_text", "text": text}]}]
-
-    for _ in range(MAX_ROUNDS):
-        response = client.responses.parse(
-            model=os.environ["OPENAI_MODEL"],
-            instructions=INSTRUCTIONS,
-            input=input_items,
-            tools=TOOLS,
-            text_format=Extraction,
-            reasoning={"effort": REASONING_EFFORT},
-        )
-
-        # Does the model want the screenshot?
-        tool_calls = [
-            o
-            for o in response.output
-            if o.type == "function_call" and o.name == "get_screenshot"
-        ]
+    for _ in range(MAX_ROUNDS - 1):
+        tool_calls = [o for o in response.output if o.type == "function_call"]
         if not tool_calls:
             # No tool call -> final structured answer.
             if response.output_parsed is None:
@@ -226,46 +220,66 @@ def extract(text: str, screenshot_blob: bytes | None) -> tuple[Extraction, list[
                 )
             return response.output_parsed
 
-        # It asked for the screenshot. Append the assistant's call(s) + our
-        # tool result, loop again.
-        if screenshot_blob is None:
-            # Can't fulfil the request. Tell the model so it can answer from
-            # text alone.
-            out_content = "No screenshot is available for this page."
-        else:
-            tiles = split_image(screenshot_blob, tile, overlap)
-            out_content = [
-                {
-                    "type": "input_text",
-                    "text": (
-                        f"The {len(tiles)} image(s) below are overlapping tiles "
-                        "of a single full-page screenshot of the same page. Read "
-                        "them together as one page. Tiles overlap, so the same "
-                        "person/position may recur — extract each holder once."
-                    ),
-                },
-                *[
-                    {
-                        "type": "input_image",
-                        "image_url": "data:image/png;base64,"
-                        + base64.b64encode(t).decode(),
-                    }
-                    for t in tiles
-                ],
-            ]
-        input_items += (
-            response.output
-        )  # echoes the assistant's function_call item(s) back
-        for tc in tool_calls:
-            input_items.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": tc.call_id,
-                    "output": out_content,
-                }
-            )
+        # Resolve each call by name, then hand the results back to the model.
+        outputs = [
+            {
+                "type": "function_call_output",
+                "call_id": tc.call_id,
+                "output": run_tool(tc.name, screenshot_blob),
+            }
+            for tc in tool_calls
+        ]
+        response = client.responses.parse(
+            model=os.environ["OPENAI_MODEL"],
+            previous_response_id=response.id,
+            input=outputs,
+            tools=TOOLS,
+            text_format=Extraction,
+            reasoning={"effort": REASONING_EFFORT},
+        )
 
     raise RuntimeError("extraction loop exhausted without a final answer")
+
+
+def run_tool(name: str, screenshot_blob: bytes | None):
+    """Dispatch a single tool call to its handler by *name*.
+
+    Returns the ``output`` value for a ``function_call_output`` item — either
+    a string or a list of input parts (text + images).
+    """
+    if name == "get_screenshot":
+        return screenshot_reply(screenshot_blob)
+    raise ValueError(f"unknown tool: {name!r}")
+
+
+def screenshot_reply(screenshot_blob: bytes | None):
+    """Build the model-facing reply for a ``get_screenshot`` call."""
+    if screenshot_blob is None:
+        # Can't fulfil the request. Tell the model so it can answer from
+        # text alone.
+        return "No screenshot is available for this page."
+
+    tile = int(os.environ["IMAGE_TILE_SIZE"])
+    overlap = float(os.environ["IMAGE_TILE_OVERLAP"])
+    tiles = split_image(screenshot_blob, tile, overlap)
+    return [
+        {
+            "type": "input_text",
+            "text": (
+                f"The {len(tiles)} image(s) below are overlapping tiles "
+                "of a single full-page screenshot of the same page. Read "
+                "them together as one page. Tiles overlap, so the same "
+                "person/position may recur — extract each holder once."
+            ),
+        },
+        *[
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64," + base64.b64encode(t).decode(),
+            }
+            for t in tiles
+        ],
+    ]
 
 
 # ===========================================================================
@@ -312,13 +326,6 @@ def load_input(path: str) -> list[InputRow]:
 # ===========================================================================
 # Core pipelines
 # ===========================================================================
-
-
-async def run_snapshot_url(url: str, out_path: Path) -> None:
-    log.info("snapshotting %s", url)
-    data = await async_snapshot_url(url)
-    write_jsonl(out_path, [data])
-    log.info("wrote 1 snapshot → %s", out_path)
 
 
 async def run_snapshot_csv(
@@ -388,12 +395,6 @@ def cli() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s — %(message)s",
     )
-
-
-@cli.command("snapshot-url", help="Snapshot a single URL through Pravda.")
-@click.argument("url")
-def snapshot_url_cmd(url: str) -> None:
-    asyncio.run(run_snapshot_url(url, Path("data/snapshots.jsonl")))
 
 
 @cli.command("snapshot-csv", help="Snapshot all URLs from a CSV through Pravda.")

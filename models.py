@@ -42,7 +42,7 @@ class Page(Base):
     institute: Mapped[str]
     # Fallback position from the dataset, applied to holders the model left
     # without a title.
-    position: Mapped[str | None]
+    position: Mapped[str]
     # Which CSV / dataset this page was sourced from.
     dataset: Mapped[str]
 

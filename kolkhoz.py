@@ -306,7 +306,7 @@ class InputRow(BaseModel):
     """One row of the input CSV: a URL plus its known metadata."""
 
     institute: str
-    position: str | None  # fallback when the model extracts no position
+    position: str
     url: str
 
 
@@ -317,11 +317,11 @@ def load_input(path: str) -> list[InputRow]:
         return [
             InputRow(
                 institute=row["institute"].strip(),
-                position=row["position"].strip() or None,
+                position=row["position"].strip(),
                 url=row["url"].strip(),
             )
             for row in reader
-            if row["url"].strip()
+            if row["url"].strip() and row["position"].strip()
         ]
 
 
@@ -476,13 +476,8 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         person.add("proof", doc.id)
         _merge(bucket, person.to_dict())
 
-        # When the page names a person but no title, we cannot place them in
-        # a Position, so we stop after emitting the Person.
-        position_title = holder.position or page.position
-        if position_title is None:
-            continue
-
         # --- Position: the (institute, title) role. ---
+        position_title = holder.position or page.position
         position = ftm_model.make_entity("Position")
         position.make_id("position", org.id, position_title)
         position.add("name", position_title)

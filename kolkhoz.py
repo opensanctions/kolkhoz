@@ -13,7 +13,6 @@ import asyncio
 import base64
 import csv
 import io
-import json
 import logging
 import os
 import random
@@ -48,8 +47,8 @@ log = logging.getLogger("kolkhoz")
 # ===========================================================================
 
 
-async def async_snapshot_url(url: str) -> dict:
-    async with httpx.AsyncClient(timeout=120) as client:
+async def async_snapshot_url(url: str, sem: asyncio.Semaphore) -> dict:
+    async with sem, httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             f"{os.environ['PRAVDA_URL']}/snapshots", json={"url": url}
         )
@@ -292,25 +291,12 @@ def screenshot_reply(screenshot_blob: bytes | None):
 # ===========================================================================
 
 
-def write_jsonl(path: Path, records) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as f:
-        for record in records:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
 class InputRow(BaseModel):
     """One row of the input CSV: a URL plus its known metadata."""
 
     institute: str
     position: str | None  # fallback when the model extracts no position
     url: str
-
-
-def default_out_path(csv_path: str, kind: str) -> Path:
-    """Default output path derived from the input CSV: ``data/<stem>.<kind>.jsonl``."""
-    stem = Path(csv_path).stem
-    return Path("data") / f"{stem}.{kind}.jsonl"
 
 
 def load_input(path: str) -> list[InputRow]:
@@ -334,25 +320,32 @@ def load_input(path: str) -> list[InputRow]:
 
 
 async def run_snapshot_csv(
-    rows: list[InputRow], out_path: Path, concurrency: int
+    rows: list[InputRow], dataset: str, concurrency: int
 ) -> None:
-    urls = [row.url for row in rows]
+    urls = {row.url for row in rows}
     log.info("%d unique URL(s) to snapshot", len(urls))
 
     sem = asyncio.Semaphore(concurrency)
-
-    async def limited_snapshot(url: str) -> dict:
-        async with sem:
-            return await async_snapshot_url(url)
-
-    tasks = [asyncio.create_task(limited_snapshot(url)) for url in urls]
-    results: list[dict] = []
+    tasks = [asyncio.create_task(async_snapshot_url(url, sem)) for url in urls]
     for task in asyncio.as_completed(tasks):
         data = await task
-        results.append(data)
-        log.info("snapshotted %s", data.get("url"))
-    write_jsonl(out_path, results)
-    log.info("wrote %d snapshot(s) → %s", len(results), out_path)
+        log.info("snapshotted %s", data["url"])
+
+    Base.metadata.create_all(engine)
+    with Session() as session:
+        for row in rows:
+            page = session.query(PageRow).filter_by(url=row.url).first()
+            if page is None:
+                session.add(
+                    PageRow(
+                        url=row.url,
+                        institute=row.institute,
+                        position=row.position,
+                        dataset=dataset,
+                    )
+                )
+        session.commit()
+    log.info("wrote %d page(s) → %s", len(rows), os.environ["KOLKHOZ_DB"])
 
 
 def extract_one(
@@ -409,8 +402,9 @@ def cli() -> None:
     help="Max concurrent requests to Pravda.",
 )
 def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
-    out_path = default_out_path(csv_path, "snapshots")
-    asyncio.run(run_snapshot_csv(load_input(csv_path), out_path, concurrency))
+    Path(os.environ["KOLKHOZ_DB"]).parent.mkdir(parents=True, exist_ok=True)
+    dataset = Path(csv_path).stem
+    asyncio.run(run_snapshot_csv(load_input(csv_path), dataset, concurrency))
 
 
 @cli.command(

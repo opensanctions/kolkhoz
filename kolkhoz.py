@@ -1,16 +1,3 @@
-"""Kolkhoz — turn raw web pages into structured data about political position holders.
-
-Orchestrates Pravda web capture and LLM extraction into a single CLI:
-
-- ``snapshot-url``   snapshot a single URL through Pravda
-- ``snapshot-csv``   snapshot all URLs from a CSV through Pravda
-- ``extract``        read pages from the database, fetch the latest Pravda
-                      snapshot for each, run an LLM extraction step, and store
-                      the results in the database
-- ``export-ftm``     export the extracted holders to a Followthemoney
-                      (followthemoney.tech) entity stream
-"""
-
 import asyncio
 import base64
 import csv
@@ -505,7 +492,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
 # ===========================================================================
 
 
-@click.group(help=__doc__)
+@click.group()
 def cli() -> None:
     logging.basicConfig(
         level=logging.INFO,

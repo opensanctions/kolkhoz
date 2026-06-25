@@ -455,9 +455,6 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                         screenshot_blob = blob
             extraction = extract(text, screenshot_blob)
             holders = [h.model_dump() for h in extraction.holders]
-            for holder in holders:
-                if holder["position"] is None:
-                    holder["position"] = page.position
             log.info("%s → %d holder(s)", snapshot["url"], len(holders))
 
             n += 1

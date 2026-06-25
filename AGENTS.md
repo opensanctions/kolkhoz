@@ -10,12 +10,14 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 
 - **Python** 3.13+ managed by **uv**.
 - **SQLite** for structured results (extracted humans, positions, links to Pravda snapshots).
+- **[Followthemoney](https://followthemoney.tech)** as the export model: extracted holders are emitted as Organization / Position / Person / Occupancy / Document entities.
 - **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)) for web page capture and storage. The base URL is set in `PRAVDA_URL` (see `.env`). Kolkhoz hits Pravda's FastAPI and reads returned file paths directly from disk.
 
 ## Project structure
 
 ```
-*.py               # standalone scripts
+kolkhoz.py         # the CLI: snapshot-csv, extract, export-ftm
+models.py          # SQLAlchemy domain (Page, Extraction, Holder)
 ```
 
 ## Conventions

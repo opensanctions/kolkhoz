@@ -321,14 +321,14 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
     for holder, extraction, page in rows:
         # --- Organization: the institute the page is about. ---
         org = ftm_model.make_entity("Organization")
-        org.make_id("org", page.dataset, page.institute)
+        org.make_id("org", page.dataset, page.url, page.institute)
         org.add("name", page.institute)
         org.add("website", page.url)
         bucket[org.id] = bucket.get(org.id, org).merge(org)
 
         # --- Document: the Pravda snapshot this holder was read from. ---
         doc = ftm_model.make_entity("Document")
-        doc.make_id("pravda", extraction.snapshot_id)
+        doc.make_id("pravda", page.dataset, page.url, extraction.snapshot_id)
         doc.add("title", page.url)
         doc.add("sourceUrl", page.url)
         doc.add("notes", f"Pravda snapshot {extraction.snapshot_id}")
@@ -337,7 +337,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
 
         # --- Person: the named human. ---
         person = ftm_model.make_entity("Person")
-        person.make_id("person", page.dataset, holder.human)
+        person.make_id("person", page.dataset, page.url, holder.human)
         person.add("name", holder.human)
         person.add("sourceUrl", page.url)
         person.add("proof", doc.id)
@@ -346,7 +346,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         # --- Position: the (institute, title) role. ---
         position_title = holder.position or page.position
         position = ftm_model.make_entity("Position")
-        position.make_id("position", org.id, position_title)
+        position.make_id("position", page.dataset, page.url, position_title)
         position.add("name", position_title)
         position.add("organization", org.id)
         position.add("sourceUrl", page.url)
@@ -354,7 +354,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
 
         # --- Occupancy: this person holding this position. ---
         occupancy = ftm_model.make_entity("Occupancy")
-        occupancy.make_id("occupancy", person.id, position.id)
+        occupancy.make_id("occupancy", page.dataset, page.url, person.id, position.id)
         occupancy.add("holder", person.id)
         occupancy.add("post", position.id)
         occupancy.add("status", "current")

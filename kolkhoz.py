@@ -72,6 +72,10 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
     slicing: each strip keeps the full width. Strips are laid out on a stride
     of ``tile * (1 - overlap)``, with a shorter remainder strip at the end if
     needed. Images no taller than *tile* come back as a single strip.
+
+    Solid-colour strips (remainder offcuts, background bands) carry no
+    content and are dropped via the same ``getcolors(1)`` check as
+    ``is_blank``, so they never reach the model.
     """
     image = Image.open(io.BytesIO(blob))
     width, height = image.size
@@ -91,8 +95,11 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
 
     tiles: list[bytes] = []
     for top, bottom in spans(height):
+        crop = image.crop((0, top, width, bottom))
+        if crop.getcolors(1) is not None:
+            continue
         buf = io.BytesIO()
-        image.crop((0, top, width, bottom)).save(buf, format="PNG")
+        crop.save(buf, format="PNG")
         tiles.append(buf.getvalue())
     return tiles
 

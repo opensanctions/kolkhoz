@@ -50,11 +50,6 @@ def latest_snapshot(client: httpx.Client, url: str) -> dict | None:
     return items[0] if items else None
 
 
-def read_blob(path: str) -> bytes:
-    """Read a Pravda blob directly from shared storage."""
-    return Path(path).read_bytes()
-
-
 def is_blank(blob: bytes) -> bool:
     """True if the image is a single solid colour (a blank or failed render).
 
@@ -445,9 +440,16 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                 )
                 continue
 
-            text = read_blob(snapshot["plaintext"]).decode("utf-8", errors="replace")
-            html = read_blob(snapshot["rendered_html"]).decode(
-                "utf-8", errors="replace"
+            prefix = snapshot["prefix"]
+            text = (
+                Path(prefix, snapshot["plaintext"])
+                .read_bytes()
+                .decode("utf-8", errors="replace")
+            )
+            html = (
+                Path(prefix, snapshot["rendered_html"])
+                .read_bytes()
+                .decode("utf-8", errors="replace")
             )
 
             log.info("%s → extracting …", snapshot["url"])
@@ -455,9 +457,8 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
             reason = screenshot_reason(text, html)
             if reason is not None:
                 log.info("  → %s → including screenshot", reason)
-                shot_path = snapshot.get("screenshot")
-                if shot_path:
-                    blob = read_blob(shot_path)
+                if snapshot.get("screenshot") is not None:
+                    blob = Path(prefix, snapshot["screenshot"]).read_bytes()
                     if not is_blank(blob):
                         screenshot_blob = blob
             extraction = extract(text, screenshot_blob)

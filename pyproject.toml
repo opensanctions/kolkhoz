@@ -11,7 +11,6 @@ dependencies = [
     "openai>=2.41.1",
     "pillow>=12.2.0",
     "python-dotenv>=1.2.2",
-    "pyyaml>=6.0.3",
     "sqlalchemy>=2.0.51",
 ]
 

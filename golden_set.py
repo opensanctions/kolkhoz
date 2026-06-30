@@ -2,14 +2,20 @@
 
 The golden set is the ground truth we compare kolkhoz extractions against. It
 is sliced straight out of the OpenSanctions PEP collection export (an FTM
-entity stream) — no local datasets/ checkout, no crawler source scanning.
+entity stream) — no local datasets/ checkout.
 
-The export *is* the PEP list, so every Occupancy in it is in scope. The grain
-of the golden set is the **page**: kolkhoz snapshots a URL and extracts
-holders from it, so each golden row attributes a holder to the page they were
-scraped from — the holder's `sourceUrl` on their Person entity. Persons with
-no `sourceUrl` (pure-Wikidata entities, etc.) have nothing page-addressable to
-test against and are dropped.
+kolkhoz snapshots and extracts from rendered HTML pages, so the golden set is
+scoped to the OpenSanctions datasets that crawl such pages. We read the format
+from the OpenSanctions catalog index (a single small JSON) rather than a
+local checkout: an Occupancy is in scope only if one of its datasets declares
+`data.format: HTML`. This drops Wikidata-derived datasets, JSON/CSV/PDF feeds,
+and anything else kolkhoz could never snapshot.
+
+The grain of the golden set is the **page**: kolkhoz snapshots a URL and
+extracts holders from it, so each golden row attributes a holder to the page
+they were scraped from — the holder's `sourceUrl` on their Person entity.
+Persons with no `sourceUrl` have nothing page-addressable to test against and
+are dropped.
 
 A person may carry several sourceUrls (a list page plus a detail page, or a
 second source they were merged with); we emit one row per sourceUrl, recording
@@ -46,6 +52,10 @@ import httpx
 PEPS_URL = "https://data.opensanctions.org/datasets/latest/peps/entities.ftm.json"
 # Local cache for the downloaded export, alongside the other data files.
 PEPS_CACHE = Path("data/peps.ftm.json")
+# The OpenSanctions catalog index, listing every dataset with its crawler
+# config. We use each entry's `data.format` to scope the golden set to
+# HTML-page rosters. Small enough to fetch fresh each run.
+CATALOG_URL = "https://data.opensanctions.org/datasets/latest/index.json"
 DEFAULT_OUT_CSV = Path("data/golden.csv")
 DEFAULT_OUT_FTM = Path("data/golden.ftm.json")
 
@@ -72,6 +82,28 @@ def fetch_peps(url: str, cache: Path) -> Path:
                 f.write(chunk)
     tmp.replace(cache)
     return cache
+
+
+def load_html_dataset_keys(url: str) -> set[str]:
+    """Return the names of OpenSanctions datasets crawled from an HTML page.
+
+    The catalog index lists every dataset alongside its crawler config; we
+    keep those whose `data.format` is HTML and that declare a source URL.
+    kolkhoz can only snapshot rendered pages, so non-HTML sources (JSON/CSV/
+    PDF/XML feeds, Wikidata-derived datasets) are out of scope. The index is
+    small, so we fetch it fresh each run.
+    """
+    resp = httpx.get(url, follow_redirects=True, timeout=60)
+    resp.raise_for_status()
+    catalog = resp.json()
+    keys: set[str] = set()
+    for entry in catalog.get("datasets") or []:
+        data = entry.get("data") or {}
+        if str(data.get("format", "")).upper() == "HTML" and data.get("url"):
+            keys.add(entry["name"])
+    if not keys:
+        raise SystemExit(f"no HTML datasets found in catalog {url}")
+    return keys
 
 
 def iter_entities(path: Path):
@@ -107,24 +139,28 @@ def _source_urls(entity: dict | None) -> list[str]:
 
 def build_golden(
     peps_ftm: Path,
+    html_keys: set[str],
 ) -> tuple[list[dict], dict[str, dict]]:
     """Slice the page-centric golden set out of the PEP export.
 
     Two streaming passes over the export (it is ~950 MB, so we never hold it
     all in memory):
 
-    Pass 1 — collect every Occupancy (the whole export is PEPs, so all are in
-    scope), and accumulate the Person/Position ids they reference.
+    Pass 1 — collect every Occupancy that belongs to at least one HTML-page
+    dataset (`html_keys`), and accumulate the Person/Position ids they
+    reference. An occupancy can span several datasets (e.g. a person shared
+    between a national roster and Wikidata); we keep it as long as one of
+    those datasets is an HTML page, and record only the in-scope keys.
 
     Pass 2 — pick up the Person and Position entities needed to name those
     occupancies.
 
     Each surviving record carries its page (the holder's sourceUrl), holder
-    name, post name, status, and the datasets the occupancy belongs to.
-    Occupancies whose Person has no sourceUrl are dropped — there is no page
-    to snapshot and test against.
+    name, post name, status, and the in-scope datasets. Occupancies whose
+    Person has no sourceUrl are dropped — there is no page to snapshot and
+    test against.
     """
-    print("pass 1: scanning occupancies…")
+    print(f"pass 1: scanning occupancies for {len(html_keys)} HTML dataset(s)…")
 
     occupancies: list[dict] = []
     needed_persons: set[str] = set()
@@ -133,11 +169,13 @@ def build_golden(
     for ent in iter_entities(peps_ftm):
         if ent["schema"] != "Occupancy":
             continue
+        hit_keys = set(ent.get("datasets") or []) & html_keys
+        if not hit_keys:
+            continue
         props = ent.get("properties") or {}
         holder = (props.get("holder") or [None])[0]
         post = (props.get("post") or [None])[0]
         status = (props.get("status") or [None])[0]
-        datasets = sorted(set(ent.get("datasets") or []))
         if holder:
             needed_persons.add(holder)
         if post:
@@ -148,7 +186,7 @@ def build_golden(
                 "holder": holder,
                 "post": post,
                 "status": status,
-                "datasets": datasets,
+                "datasets": sorted(hit_keys),
             }
         )
 
@@ -253,8 +291,10 @@ def write_ftm(records: list[dict], entities_by_id: dict[str, dict], out: Path) -
     help="Output golden FTM stream.",
 )
 def cli(out_csv: Path, out_ftm: Path) -> None:
+    html_keys = load_html_dataset_keys(CATALOG_URL)
+    print(f"{len(html_keys)} HTML dataset(s) in the OpenSanctions catalog")
     peps_path = fetch_peps(PEPS_URL, PEPS_CACHE)
-    records, entities_by_id = build_golden(peps_path)
+    records, entities_by_id = build_golden(peps_path, html_keys)
     write_csv(records, out_csv)
     write_ftm(records, entities_by_id, out_ftm)
 

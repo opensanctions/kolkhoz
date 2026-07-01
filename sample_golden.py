@@ -24,7 +24,6 @@ Outputs (written under data/, named after --stem):
 
     uv run python sample_golden.py                     # 30 pages, 10 per bucket
     uv run python sample_golden.py -n 60 --seed 7
-    uv run python sample_golden.py --profile 20 --small-roster 10 --large-roster 5
 """
 
 import csv
@@ -38,24 +37,19 @@ import click
 DEFAULT_GOLDEN = Path("data/golden.csv")
 DEFAULT_STEM = "golden_sample"
 
-# Page buckets by distinct-holder count. A page is a "roster" when it lists
-# several people; the boundary between small and large is a convenience so a
-# handful of slots always reach the deep directory-style pages.
+# Page buckets by distinct-holder count, in order. A page is a "roster" when
+# it lists several people; the boundary between small and large is a
+# convenience so a handful of slots always reach the deep directory-style pages.
 BUCKETS = ("profile", "small_roster", "large_roster")
-BUCKET_RANGES = {
-    "profile": (1, 1),
-    "small_roster": (2, 10),
-    "large_roster": (11, None),
-}
 
 
 def classify(holder_count: int) -> str:
     """Return the bucket name for a page with this many distinct holders."""
-    for name in BUCKETS:
-        lo, hi = BUCKET_RANGES[name]
-        if holder_count >= lo and (hi is None or holder_count <= hi):
-            return name
-    raise AssertionError(f"unreachable: holder_count={holder_count}")
+    if holder_count <= 1:
+        return "profile"
+    if holder_count <= 10:
+        return "small_roster"
+    return "large_roster"
 
 
 def load_pages(golden_csv: Path) -> tuple[dict[str, list[dict]], dict[str, str]]:
@@ -148,7 +142,7 @@ def write_sample_input(
         writer.writerow(["institute", "position", "url"])
         for page in pages:
             rows = rows_by_page[page]
-            dataset = (rows[0]["datasets"].split(";") or [""])[0]
+            dataset = rows[0]["datasets"].split(";")[0]
             writer.writerow([dataset, modal_position(rows), page])
     print(f"wrote {len(pages)} input row(s) → {out}")
 
@@ -172,57 +166,20 @@ def write_sample_input(
     "-n",
     "--total",
     type=int,
-    default=None,
-    help="Total pages to sample, split evenly across buckets (default 30). "
-    "Ignored when individual bucket sizes are given.",
-)
-@click.option(
-    "--profile",
-    "profile",
-    type=int,
-    default=None,
-    help="Pages from the profile bucket.",
-)
-@click.option(
-    "--small-roster",
-    "small_roster",
-    type=int,
-    default=None,
-    help="Pages from the small-roster bucket.",
-)
-@click.option(
-    "--large-roster",
-    "large_roster",
-    type=int,
-    default=None,
-    help="Pages from the large-roster bucket.",
+    default=30,
+    help="Total pages to sample, split evenly across buckets.",
 )
 @click.option("--seed", type=int, default=0, help="RNG seed for reproducibility.")
 def cli(
     golden: Path,
     stem: str,
-    total: int | None,
-    profile: int | None,
-    small_roster: int | None,
-    large_roster: int | None,
+    total: int,
     seed: int,
 ) -> None:
-    explicit = (
-        profile is not None or small_roster is not None or large_roster is not None
-    )
-    if explicit:
-        want = {
-            "profile": profile or 0,
-            "small_roster": small_roster or 0,
-            "large_roster": large_roster or 0,
-        }
-    else:
-        n = total or 30
-        per, rem = divmod(n, len(BUCKETS))
-        want = {b: per for b in BUCKETS}
-        want[BUCKETS[0]] += rem  # hand the remainder to profiles
-    if sum(want.values()) == 0:
-        raise SystemExit("nothing to sample (all bucket sizes are 0)")
+    # Split evenly across buckets; hand any remainder to profiles.
+    per, rem = divmod(total, len(BUCKETS))
+    want = {b: per for b in BUCKETS}
+    want[BUCKETS[0]] += rem
 
     rows_by_page, bucket_by_page = load_pages(golden)
     available = Counter(bucket_by_page.values())

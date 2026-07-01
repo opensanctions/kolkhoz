@@ -45,8 +45,8 @@ uv run python kolkhoz.py export-ftm -d hio_leadership -o hio.ftm
 Score extractions against ground truth from the [OpenSanctions](https://opensanctions.org) PEP export:
 
 ```bash
-uv run python golden_set.py                                      # build golden set (cached)
-uv run python sample_golden.py                                   # → data/golden_sample*
+uv run python golden.py build                                      # build golden set (cached)
+uv run python golden.py sample                                     # → data/golden_sample*
 uv run python kolkhoz.py snapshot-csv data/golden_sample_input.csv
 uv run python kolkhoz.py extract golden_sample_input
 uv run python evaluate.py

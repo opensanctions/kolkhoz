@@ -1,16 +1,22 @@
-"""Build a page-centric golden set of PEP holders from the OpenSanctions export.
+"""Build and sample the golden set of PEP holders for evaluation.
 
 The golden set is the ground truth we compare kolkhoz extractions against. It
 is sliced straight out of the OpenSanctions PEP collection export (an FTM
-entity stream) — no local datasets/ checkout.
+entity stream) — no local datasets/ checkout. This module has two stages:
+
+  build   Download (cached) the PEP export and emit `data/golden.csv`, one row
+          per (page, holder). This is the full flat golden set.
+  sample  Draw a balanced (profile/roster) subset of `golden.csv` for an
+          evaluation run, emitting `{stem}.csv` and `{stem}_input.csv` under
+          data/.
 
 kolkhoz snapshots and extracts from rendered HTML pages, so the golden set
 keeps only holders whose `sourceUrl` is itself a renderable HTML page. A
 dataset can be crawled from an HTML index yet link out to PDFs, spreadsheets,
-or other documents (e.g. Bulgaria's judiciary declarations); those leaf
-URLs have nothing for kolkhoz to extract and would only pollute the golden
-set. We therefore filter at the sourceUrl level by rejecting known non-HTML
-file extensions, rather than trusting the dataset's declared format.
+or other documents (e.g. Bulgaria's judiciary declarations); those leaf URLs
+have nothing for kolkhoz to extract and would only pollute the golden set. We
+therefore filter at the sourceUrl level by rejecting known non-HTML file
+extensions, rather than trusting the dataset's declared format.
 
 The grain of the golden set is the **page**: kolkhoz snapshots a URL and
 extracts holders from it, so each golden row attributes a holder to the page
@@ -23,34 +29,44 @@ second source they were merged with); we emit one row per sourceUrl, recording
 exactly what OpenSanctions recorded rather than guessing which page is
 "primary".
 
-The export is downloaded on first run and cached locally (~950 MB
-uncompressed, far smaller over the wire with gzip). To force a refresh,
-delete the cache file.
+Usage:
 
-Output (written under `data/`):
+    uv run python golden.py build                      # download (cached) + build
+    uv run python golden.py sample                     # 30 pages, 10 per bucket
+    uv run python golden.py sample -n 60 --seed 7
 
-- `golden.csv`     one row per (page, holder). The flat, diffable form of the
-                   golden set, keyed by sourceUrl so it can be joined against
-                   a kolkhoz extraction per page.
-
-    uv run python golden_set.py        # download (cached) + build
+Outputs are written under `data/`. The PEP export is downloaded on first run
+and cached locally (~950 MB uncompressed, far smaller over the wire with
+gzip). To force a refresh, delete the cache file.
 """
 
 import csv
 import json
+import random
 import sys
 import urllib.parse
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import click
 import httpx
+
+# ---------------------------------------------------------------------------
+# Shared paths
+# ---------------------------------------------------------------------------
 
 # The OpenSanctions PEP collection export, served as an FTM entity stream.
 # See datasets/_collections/peps.yml in the opensanctions repo.
 PEPS_URL = "https://data.opensanctions.org/datasets/latest/peps/entities.ftm.json"
 # Local cache for the downloaded export, alongside the other data files.
 PEPS_CACHE = Path("data/peps.ftm.json")
-DEFAULT_OUT_CSV = Path("data/golden.csv")
+DEFAULT_GOLDEN = Path("data/golden.csv")
+DEFAULT_STEM = "golden_sample"
+
+
+# ===========================================================================
+# build
+# ===========================================================================
 
 
 def fetch_peps(url: str, cache: Path) -> Path:
@@ -290,17 +306,202 @@ def write_csv(records: list[dict], out: Path) -> None:
     print(f"wrote {len(records)} row(s) across {len(pages)} page(s) → {out}")
 
 
-@click.command()
+@click.command("build")
 @click.option(
     "--out-csv",
     type=click.Path(dir_okay=False, path_type=Path),
-    default=DEFAULT_OUT_CSV,
+    default=DEFAULT_GOLDEN,
     help="Output golden CSV.",
 )
-def cli(out_csv: Path) -> None:
+def build_cmd(out_csv: Path) -> None:
     peps_path = fetch_peps(PEPS_URL, PEPS_CACHE)
     records = build_golden(peps_path)
     write_csv(records, out_csv)
+
+
+# ===========================================================================
+# sample
+# ===========================================================================
+
+# Page buckets by distinct-holder count, in order. A page is a "roster" when
+# it lists several people; the boundary between small and large is a
+# convenience so a handful of slots always reach the deep directory-style pages.
+BUCKETS = ("profile", "small_roster", "large_roster")
+
+
+def classify(holder_count: int) -> str:
+    """Return the bucket name for a page with this many distinct holders."""
+    if holder_count <= 1:
+        return "profile"
+    if holder_count <= 10:
+        return "small_roster"
+    return "large_roster"
+
+
+def load_pages(golden_csv: Path) -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """Read golden.csv, grouping rows by page.
+
+    Returns (rows_by_page, bucket_by_page). A page's bucket is derived from
+    its count of distinct holder names.
+    """
+    rows_by_page: dict[str, list[dict]] = defaultdict(list)
+    with open(golden_csv) as f:
+        for row in csv.DictReader(f):
+            rows_by_page[row["page"]].append(row)
+
+    bucket_by_page: dict[str, str] = {}
+    for page, rows in rows_by_page.items():
+        holders = {r["human"] for r in rows if r["human"].strip()}
+        bucket_by_page[page] = classify(len(holders))
+    return rows_by_page, bucket_by_page
+
+
+def modal_position(rows: list[dict]) -> str:
+    """Pick the most common non-empty position among a page's holders.
+
+    A roster lists several roles; the input CSV carries a single position per
+    page, so we take the plurality. It is only a fallback label (the extractor
+    sets each holder's own position), so exactness doesn't matter — we just
+    need a non-empty value that `snapshot-csv` won't drop.
+    """
+    counts = Counter(r["position"] for r in rows if r["position"].strip())
+    # load_pages is only called on golden rows, which always carry at least
+    # one non-empty position per page, so counts is non-empty here.
+    return counts.most_common(1)[0][0]
+
+
+def sample_pages(
+    bucket_by_page: dict[str, str],
+    want: dict[str, int],
+    rng: random.Random,
+) -> list[str]:
+    """Draw up to `want[b]` pages uniformly from each bucket.
+
+    Caps at the bucket's size rather than failing: the large_roster bucket is
+    small (~250 pages), so a request for more than it holds is satisfied with
+    everything available. Empties a bucket entirely if its want is 0.
+    """
+    in_bucket: dict[str, list[str]] = {b: [] for b in BUCKETS}
+    for page, bucket in bucket_by_page.items():
+        in_bucket[bucket].append(page)
+
+    chosen: list[str] = []
+    for bucket in BUCKETS:
+        pages = sorted(in_bucket[bucket])  # stable input to the shuffle
+        rng.shuffle(pages)
+        n = min(want.get(bucket, 0), len(pages))
+        chosen.extend(pages[:n])
+    return chosen
+
+
+def write_sample_golden(
+    rows_by_page: dict[str, list[dict]], pages: list[str], out: Path
+) -> None:
+    """Write the golden rows for the sampled pages, same schema as golden.csv."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fields = ["page", "datasets", "human", "position", "status"]
+    written = 0
+    with open(out, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(fields)
+        for page in sorted(pages):
+            for row in sorted(rows_by_page[page], key=lambda r: r["human"] or ""):
+                writer.writerow([row[k] for k in fields])
+                written += 1
+    print(f"wrote {written} golden row(s) across {len(pages)} page(s) → {out}")
+
+
+def write_sample_input(
+    rows_by_page: dict[str, list[dict]], pages: list[str], out: Path
+) -> None:
+    """Write one input row per sampled page for `kolkhoz.py snapshot-csv`.
+
+    institute = the page's (first) dataset key — a stable identifier for the
+               publishing source; we don't have a human publisher name in the
+               golden set, and this is what the export joins on.
+    position  = the page's modal position (see modal_position).
+    url       = the page.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["institute", "position", "url"])
+        for page in pages:
+            rows = rows_by_page[page]
+            dataset = rows[0]["datasets"].split(";")[0]
+            writer.writerow([dataset, modal_position(rows), page])
+    print(f"wrote {len(pages)} input row(s) → {out}")
+
+
+@click.command("sample")
+@click.option(
+    "-g",
+    "--golden",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=DEFAULT_GOLDEN,
+    help="Input golden CSV to sample from.",
+)
+@click.option(
+    "-s",
+    "--stem",
+    type=str,
+    default=DEFAULT_STEM,
+    help="Output stem: writes {stem}.csv and {stem}_input.csv under data/.",
+)
+@click.option(
+    "-n",
+    "--total",
+    type=int,
+    default=30,
+    help="Total pages to sample, split evenly across buckets.",
+)
+@click.option("--seed", type=int, default=0, help="RNG seed for reproducibility.")
+def sample_cmd(
+    golden: Path,
+    stem: str,
+    total: int,
+    seed: int,
+) -> None:
+    # Split evenly across buckets; hand any remainder to profiles.
+    per, rem = divmod(total, len(BUCKETS))
+    want = {b: per for b in BUCKETS}
+    want[BUCKETS[0]] += rem
+
+    rows_by_page, bucket_by_page = load_pages(golden)
+    available = Counter(bucket_by_page.values())
+    print(
+        "available pages:",
+        ", ".join(f"{b}={available[b]}" for b in BUCKETS),
+        file=sys.stderr,
+    )
+
+    rng = random.Random(seed)
+    pages = sample_pages(bucket_by_page, want, rng)
+
+    drawn = Counter(bucket_by_page[p] for p in pages)
+    print(
+        "sampled pages:  ",
+        ", ".join(f"{b}={drawn[b]}" for b in BUCKETS),
+        file=sys.stderr,
+    )
+
+    out_dir = Path("data")
+    write_sample_golden(rows_by_page, pages, out_dir / f"{stem}.csv")
+    write_sample_input(rows_by_page, pages, out_dir / f"{stem}_input.csv")
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
+
+
+@click.group()
+def cli() -> None:
+    """Build and sample the golden set of PEP holders for evaluation."""
+
+
+cli.add_command(build_cmd)
+cli.add_command(sample_cmd)
 
 
 if __name__ == "__main__":

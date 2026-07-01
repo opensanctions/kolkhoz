@@ -1,6 +1,6 @@
 """Score kolkhoz extractions against a golden sample.
 
-The golden set (`sample_golden.py`) is one row per (page, human, position)
+The golden set (`golden.py sample`) is one row per (page, human, position)
 that OpenSanctions recorded for the page. The extraction pipeline writes one
 `Holder(human, position)` per latest Extraction per Page. This script joins
 the two on the page URL and scores them at the (human, position)-pair level.

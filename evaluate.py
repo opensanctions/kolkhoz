@@ -3,7 +3,7 @@
 The golden set (`golden.py sample`) is one row per (page, human, position)
 that OpenSanctions recorded for the page. The extraction pipeline writes one
 `Holder(human, position)` per latest Extraction per Page. This script joins
-the two on the page URL and scores them at the (human, position)-pair level.
+the two on the page URL and scores them.
 
 Matching is exact string equality. No normalization, no fuzzy matching: the
 golden side and the extraction side read different copies of the same page, so
@@ -14,6 +14,20 @@ The position on an extracted pair is `holder.position`, falling back to the
 input-CSV position on the Page when the extractor left it null — the same
 rule `kolkhoz.py build_ftm_entities` applies at export time, so a pair scored
 here is exactly the pair that would be emitted.
+
+Scores are reported in four dimensions, each as micro/macro precision, recall
+and F1:
+
+* **pairs**     — the (human, position) pair, as before. The strict end-to-end
+                  metric.
+* **count**     — did we find the right *number* of holders? Treats holders as
+                  anonymous: TP = min(golden, extracted), the rest is FP/FN.
+                  Tells us whether the model over- or under-counts, independent
+                  of name/position normalization.
+* **human**     — human names only, as sets per page. Isolates name reading
+                  from position reading.
+* **position**  — position titles only, as sets per page. Isolates position
+                  reading from name reading.
 
 Usage:
 
@@ -87,23 +101,55 @@ def load_extracted(dataset: str) -> dict[str, set[tuple[str, str]]]:
     return pairs_by_page
 
 
-def score_page(golden: set, extracted: set) -> dict:
-    tp = len(golden & extracted)
-    fp = len(extracted - golden)
-    fn = len(golden - extracted)
+def prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
+    """Precision / recall / F1 from raw confusion counts."""
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
-    return {
-        "tp": tp,
-        "fp": fp,
-        "fn": fn,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "fp_pairs": sorted(extracted - golden),
-        "fn_pairs": sorted(golden - extracted),
-    }
+    return precision, recall, f1
+
+
+def set_confusion(golden: set, extracted: set) -> tuple[int, int, int]:
+    """TP/FP/FN for set equality: intersection, extras, misses."""
+    tp = len(golden & extracted)
+    fp = len(extracted - golden)
+    fn = len(golden - extracted)
+    return tp, fp, fn
+
+
+def count_confusion(golden: int, extracted: int) -> tuple[int, int, int]:
+    """TP/FP/FN for an anonymous-count match (holders indistinguishable).
+
+    TP is how many holders we can pair up by count; the surplus on either side
+    is FP (over-counted) or FN (under-counted).
+    """
+    tp = min(golden, extracted)
+    fp = max(0, extracted - golden)
+    fn = max(0, golden - extracted)
+    return tp, fp, fn
+
+
+def report(title: str, page_stats: dict[str, tuple[int, int, int]]) -> None:
+    """Print a micro/macro precision-recall-F1 table for one scoring dimension.
+
+    `page_stats` maps each page to its (TP, FP, FN) for that dimension.
+    """
+    tp = sum(s[0] for s in page_stats.values())
+    fp = sum(s[1] for s in page_stats.values())
+    fn = sum(s[2] for s in page_stats.values())
+    micro_p, micro_r, micro_f1 = prf(tp, fp, fn)
+
+    per_page = [prf(*s) for s in page_stats.values()]
+    n = len(per_page)
+    macro_p = sum(p for p, _, _ in per_page) / n if n else 0.0
+    macro_r = sum(r for _, r, _ in per_page) / n if n else 0.0
+    macro_f1 = sum(f for _, _, f in per_page) / n if n else 0.0
+
+    print(f"\n{title}", file=sys.stderr)
+    print("          precision   recall     F1", file=sys.stderr)
+    print(f"micro     {micro_p:8.3f}  {micro_r:8.3f}  {micro_f1:8.3f}", file=sys.stderr)
+    print(f"macro     {macro_p:8.3f}  {macro_r:8.3f}  {macro_f1:8.3f}", file=sys.stderr)
+    print(f"          (TP={tp} FP={fp} FN={fn})", file=sys.stderr)
 
 
 @click.command()
@@ -139,32 +185,44 @@ def cli(golden: Path, dataset: str, out: Path) -> None:
 
     pages = sorted(golden_by_page.keys() | extracted_by_page.keys())
 
+    pair_stats: dict[str, tuple[int, int, int]] = {}
+    count_stats: dict[str, tuple[int, int, int]] = {}
+    human_stats: dict[str, tuple[int, int, int]] = {}
+    position_stats: dict[str, tuple[int, int, int]] = {}
     per_page: dict[str, dict] = {}
+
     for page in pages:
-        per_page[page] = score_page(
-            golden_by_page.get(page, set()), extracted_by_page.get(page, set())
-        )
+        g_pairs = golden_by_page.get(page, set())
+        e_pairs = extracted_by_page.get(page, set())
 
-    # Micro: pool TP/FP/FN across pages.
-    tp = sum(p["tp"] for p in per_page.values())
-    fp = sum(p["fp"] for p in per_page.values())
-    fn = sum(p["fn"] for p in per_page.values())
-    micro_p = tp / (tp + fp) if (tp + fp) else 0.0
-    micro_r = tp / (tp + fn) if (tp + fn) else 0.0
-    micro_f1 = (
-        2 * micro_p * micro_r / (micro_p + micro_r) if (micro_p + micro_r) else 0.0
-    )
+        g_humans = {h for h, _ in g_pairs}
+        e_humans = {h for h, _ in e_pairs}
+        g_positions = {p for _, p in g_pairs}
+        e_positions = {p for _, p in e_pairs}
 
-    # Macro: mean of per-page F1 (only pages that appear on at least one side).
-    macro_p = sum(p["precision"] for p in per_page.values()) / len(per_page)
-    macro_r = sum(p["recall"] for p in per_page.values()) / len(per_page)
-    macro_f1 = sum(p["f1"] for p in per_page.values()) / len(per_page)
+        pair_stats[page] = set_confusion(g_pairs, e_pairs)
+        count_stats[page] = count_confusion(len(g_pairs), len(e_pairs))
+        human_stats[page] = set_confusion(g_humans, e_humans)
+        position_stats[page] = set_confusion(g_positions, e_positions)
+
+        per_page[page] = {
+            "golden": len(g_pairs),
+            "extracted": len(e_pairs),
+            "pair": prf(*pair_stats[page]),
+            "count": prf(*count_stats[page]),
+            "human": prf(*human_stats[page]),
+            "position": prf(*position_stats[page]),
+            "missed_pairs": sorted(g_pairs - e_pairs),
+            "extra_pairs": sorted(e_pairs - g_pairs),
+            "missed_humans": sorted(g_humans - e_humans),
+            "extra_humans": sorted(e_humans - g_humans),
+        }
 
     print(f"\n{len(pages)} page(s) scored", file=sys.stderr)
-    print("          precision   recall     F1", file=sys.stderr)
-    print(f"micro     {micro_p:8.3f}  {micro_r:8.3f}  {micro_f1:8.3f}", file=sys.stderr)
-    print(f"macro     {macro_p:8.3f}  {macro_r:8.3f}  {macro_f1:8.3f}", file=sys.stderr)
-    print(f"          (TP={tp} FP={fp} FN={fn})", file=sys.stderr)
+    report("pairs (human, position)", pair_stats)
+    report("count (number of holders)", count_stats)
+    report("human names", human_stats)
+    report("position names", position_stats)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as f:
@@ -174,14 +232,22 @@ def cli(golden: Path, dataset: str, out: Path) -> None:
                 "page",
                 "golden",
                 "extracted",
-                "tp",
-                "fp",
-                "fn",
-                "precision",
-                "recall",
-                "f1",
-                "missed",
-                "extra",
+                "pair_p",
+                "pair_r",
+                "pair_f1",
+                "count_p",
+                "count_r",
+                "count_f1",
+                "human_p",
+                "human_r",
+                "human_f1",
+                "position_p",
+                "position_r",
+                "position_f1",
+                "missed_humans",
+                "extra_humans",
+                "missed_pairs",
+                "extra_pairs",
             ]
         )
         for page in pages:
@@ -189,16 +255,24 @@ def cli(golden: Path, dataset: str, out: Path) -> None:
             writer.writerow(
                 [
                     page,
-                    len(golden_by_page.get(page, set())),
-                    len(extracted_by_page.get(page, set())),
-                    p["tp"],
-                    p["fp"],
-                    p["fn"],
-                    f"{p['precision']:.3f}",
-                    f"{p['recall']:.3f}",
-                    f"{p['f1']:.3f}",
-                    "; ".join(f"{h} ({pos})" for h, pos in p["fn_pairs"]),
-                    "; ".join(f"{h} ({pos})" for h, pos in p["fp_pairs"]),
+                    p["golden"],
+                    p["extracted"],
+                    f"{p['pair'][0]:.3f}",
+                    f"{p['pair'][1]:.3f}",
+                    f"{p['pair'][2]:.3f}",
+                    f"{p['count'][0]:.3f}",
+                    f"{p['count'][1]:.3f}",
+                    f"{p['count'][2]:.3f}",
+                    f"{p['human'][0]:.3f}",
+                    f"{p['human'][1]:.3f}",
+                    f"{p['human'][2]:.3f}",
+                    f"{p['position'][0]:.3f}",
+                    f"{p['position'][1]:.3f}",
+                    f"{p['position'][2]:.3f}",
+                    "; ".join(p["missed_humans"]),
+                    "; ".join(p["extra_humans"]),
+                    "; ".join(f"{h} ({pos})" for h, pos in p["missed_pairs"]),
+                    "; ".join(f"{h} ({pos})" for h, pos in p["extra_pairs"]),
                 ]
             )
     print(f"\nwrote per-page eval → {out}", file=sys.stderr)

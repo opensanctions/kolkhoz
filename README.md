@@ -39,3 +39,18 @@ uv run python kolkhoz.py extract -n 20               # random sample of 20
 uv run python kolkhoz.py export-ftm -o kolkhoz.ftm
 uv run python kolkhoz.py export-ftm -d hio_leadership -o hio.ftm
 ```
+
+## Evaluation
+
+Score extractions against ground truth from the [OpenSanctions](https://opensanctions.org) PEP export:
+
+```bash
+uv run python golden_set.py                                      # build golden set (cached)
+uv run python sample_golden.py                                   # → data/golden_sample*
+uv run python kolkhoz.py snapshot-csv data/golden_sample_input.csv
+uv run python kolkhoz.py extract golden_sample_input
+uv run python evaluate.py
+```
+
+The defaults chain end-to-end. Matching is exact string equality at the
+(human, position)-pair level. `data/` is gitignored.

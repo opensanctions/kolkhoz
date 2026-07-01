@@ -4,12 +4,13 @@ The golden set is the ground truth we compare kolkhoz extractions against. It
 is sliced straight out of the OpenSanctions PEP collection export (an FTM
 entity stream) — no local datasets/ checkout.
 
-kolkhoz snapshots and extracts from rendered HTML pages, so the golden set is
-scoped to the OpenSanctions datasets that crawl such pages. We read the format
-from the OpenSanctions catalog index (a single small JSON) rather than a
-local checkout: an Occupancy is in scope only if one of its datasets declares
-`data.format: HTML`. This drops Wikidata-derived datasets, JSON/CSV/PDF feeds,
-and anything else kolkhoz could never snapshot.
+kolkhoz snapshots and extracts from rendered HTML pages, so the golden set
+keeps only holders whose `sourceUrl` is itself a renderable HTML page. A
+dataset can be crawled from an HTML index yet link out to PDFs, spreadsheets,
+or other documents (e.g. Bulgaria's judiciary declarations); those leaf
+URLs have nothing for kolkhoz to extract and would only pollute the golden
+set. We therefore filter at the sourceUrl level by rejecting known non-HTML
+file extensions, rather than trusting the dataset's declared format.
 
 The grain of the golden set is the **page**: kolkhoz snapshots a URL and
 extracts holders from it, so each golden row attributes a holder to the page
@@ -31,10 +32,6 @@ Output (written under `data/`):
 - `golden.csv`     one row per (page, holder). The flat, diffable form of the
                    golden set, keyed by sourceUrl so it can be joined against
                    a kolkhoz extraction per page.
-- `golden.ftm.json` the Person and Position entities behind those rows, as an
-                   FTM entity stream matching the format `kolkhoz.py
-                   export-ftm` emits, so the two can be compared at the entity
-                   level.
 
     uv run python golden_set.py        # download (cached) + build
 """
@@ -42,6 +39,7 @@ Output (written under `data/`):
 import csv
 import json
 import sys
+import urllib.parse
 from pathlib import Path
 
 import click
@@ -52,12 +50,7 @@ import httpx
 PEPS_URL = "https://data.opensanctions.org/datasets/latest/peps/entities.ftm.json"
 # Local cache for the downloaded export, alongside the other data files.
 PEPS_CACHE = Path("data/peps.ftm.json")
-# The OpenSanctions catalog index, listing every dataset with its crawler
-# config. We use each entry's `data.format` to scope the golden set to
-# HTML-page rosters. Small enough to fetch fresh each run.
-CATALOG_URL = "https://data.opensanctions.org/datasets/latest/index.json"
 DEFAULT_OUT_CSV = Path("data/golden.csv")
-DEFAULT_OUT_FTM = Path("data/golden.ftm.json")
 
 
 def fetch_peps(url: str, cache: Path) -> Path:
@@ -84,28 +77,6 @@ def fetch_peps(url: str, cache: Path) -> Path:
     return cache
 
 
-def load_html_dataset_keys(url: str) -> set[str]:
-    """Return the names of OpenSanctions datasets crawled from an HTML page.
-
-    The catalog index lists every dataset alongside its crawler config; we
-    keep those whose `data.format` is HTML and that declare a source URL.
-    kolkhoz can only snapshot rendered pages, so non-HTML sources (JSON/CSV/
-    PDF/XML feeds, Wikidata-derived datasets) are out of scope. The index is
-    small, so we fetch it fresh each run.
-    """
-    resp = httpx.get(url, follow_redirects=True, timeout=60)
-    resp.raise_for_status()
-    catalog = resp.json()
-    keys: set[str] = set()
-    for entry in catalog.get("datasets") or []:
-        data = entry.get("data") or {}
-        if str(data.get("format", "")).upper() == "HTML" and data.get("url"):
-            keys.add(entry["name"])
-    if not keys:
-        raise SystemExit(f"no HTML datasets found in catalog {url}")
-    return keys
-
-
 def iter_entities(path: Path):
     """Stream FTM entities, one JSON object per line."""
     with open(path) as f:
@@ -123,6 +94,80 @@ def _first_prop(entity: dict | None, name: str) -> str | None:
     return values[0] if values else None
 
 
+# File extensions for documents and binaries kolkhoz cannot render as HTML.
+# HTML pages come in endless shapes (no extension, .html, .aspx, .php, ...),
+# so we reject a denylist of known non-HTML types rather than allowlisting.
+# A URL with no extension is assumed to be a server-rendered page.
+NON_HTML_EXTENSIONS = {
+    # office documents
+    "pdf",
+    "doc",
+    "docx",
+    "rtf",
+    "odt",
+    "ods",
+    "odp",
+    "xls",
+    "xlsx",
+    "ppt",
+    "pptx",
+    "csv",
+    "tsv",
+    # structured data / feeds
+    "json",
+    "xml",
+    "rdf",
+    "rss",
+    "atom",
+    "yaml",
+    "yml",
+    "txt",
+    # archives
+    "zip",
+    "rar",
+    "7z",
+    "gz",
+    "tar",
+    "bz2",
+    # images
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "svg",
+    "bmp",
+    "tif",
+    "tiff",
+    # audio / video
+    "mp3",
+    "mp4",
+    "avi",
+    "mov",
+    "wmv",
+    "flv",
+    "webm",
+    "m4a",
+    "wav",
+}
+
+
+def _is_html_page(url: str) -> bool:
+    """True if a sourceUrl points at a renderable HTML page, not a document.
+
+    kolkhoz snapshots rendered HTML; a sourceUrl that resolves to a PDF,
+    spreadsheet, image, or other binary has nothing to extract. We parse the
+    URL path and reject known non-HTML file extensions. URLs whose final path
+    segment has no extension are treated as HTML pages (the common case for
+    server-rendered roster and detail pages).
+    """
+    last = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
+    if "." not in last:
+        return True
+    ext = last.rsplit(".", 1)[-1].lower()
+    return ext not in NON_HTML_EXTENSIONS
+
+
 def _source_urls(entity: dict | None) -> list[str]:
     """Return the distinct http(s) sourceUrls on an entity, in stored order."""
     if entity is None:
@@ -137,30 +182,26 @@ def _source_urls(entity: dict | None) -> list[str]:
     return urls
 
 
-def build_golden(
-    peps_ftm: Path,
-    html_keys: set[str],
-) -> tuple[list[dict], dict[str, dict]]:
+def build_golden(peps_ftm: Path) -> list[dict]:
     """Slice the page-centric golden set out of the PEP export.
 
     Two streaming passes over the export (it is ~950 MB, so we never hold it
     all in memory):
 
-    Pass 1 — collect every Occupancy that belongs to at least one HTML-page
-    dataset (`html_keys`), and accumulate the Person/Position ids they
-    reference. An occupancy can span several datasets (e.g. a person shared
-    between a national roster and Wikidata); we keep it as long as one of
-    those datasets is an HTML page, and record only the in-scope keys.
+    Pass 1 — collect every Occupancy and accumulate the Person/Position ids
+    it references. There is no dataset scoping here; the page-level sourceUrl
+    filter in pass 3 is what keeps the golden set to pages kolkhoz can
+    actually snapshot.
 
     Pass 2 — pick up the Person and Position entities needed to name those
     occupancies.
 
-    Each surviving record carries its page (the holder's sourceUrl), holder
-    name, post name, status, and the in-scope datasets. Occupancies whose
-    Person has no sourceUrl are dropped — there is no page to snapshot and
-    test against.
+    Each surviving record carries its page (one of the holder's HTML
+    sourceUrls), holder name, post name, status, and datasets. Occupancies
+    whose Person has no renderable HTML sourceUrl are dropped silently —
+    there is no page to snapshot and test against.
     """
-    print(f"pass 1: scanning occupancies for {len(html_keys)} HTML dataset(s)…")
+    print("pass 1: scanning occupancies…")
 
     occupancies: list[dict] = []
     needed_persons: set[str] = set()
@@ -168,9 +209,6 @@ def build_golden(
 
     for ent in iter_entities(peps_ftm):
         if ent["schema"] != "Occupancy":
-            continue
-        hit_keys = set(ent.get("datasets") or []) & html_keys
-        if not hit_keys:
             continue
         props = ent.get("properties") or {}
         holder = (props.get("holder") or [None])[0]
@@ -186,7 +224,7 @@ def build_golden(
                 "holder": holder,
                 "post": post,
                 "status": status,
-                "datasets": sorted(hit_keys),
+                "datasets": sorted(ent.get("datasets") or []),
             }
         )
 
@@ -210,13 +248,11 @@ def build_golden(
 
     print("pass 3: attributing holders to pages…")
     records: list[dict] = []
-    dropped = 0
     for occ in occupancies:
         person = entities_by_id.get(occ["holder"]) if occ["holder"] else None
         position = entities_by_id.get(occ["post"]) if occ["post"] else None
-        pages = _source_urls(person)
+        pages = [u for u in _source_urls(person) if _is_html_page(u)]
         if not pages:
-            dropped += 1
             continue
         human = _first_prop(person, "name")
         for page in pages:
@@ -227,12 +263,10 @@ def build_golden(
                     "human": human,
                     "position": _first_prop(position, "name"),
                     "status": occ["status"],
-                    "person_id": occ["holder"],
-                    "position_id": occ["post"],
                 }
             )
-    print(f"  {len(records)} page rows ({dropped} occupancies dropped: no sourceUrl)")
-    return records, entities_by_id
+    print(f"  {len(records)} page rows")
+    return records
 
 
 def write_csv(records: list[dict], out: Path) -> None:
@@ -256,27 +290,6 @@ def write_csv(records: list[dict], out: Path) -> None:
     print(f"wrote {len(records)} row(s) across {len(pages)} page(s) → {out}")
 
 
-def write_ftm(records: list[dict], entities_by_id: dict[str, dict], out: Path) -> None:
-    """Write the golden FTM stream: the Person and Position behind each row.
-
-    One JSON entity per line, the same stream format `kolkhoz.py export-ftm`
-    uses. Only entities that survived into the golden set are emitted, so the
-    file is directly comparable to a kolkhoz export.
-    """
-    out.parent.mkdir(parents=True, exist_ok=True)
-    seen: set[str] = set()
-    n = 0
-    with open(out, "w") as f:
-        for rec in records:
-            for eid in (rec["person_id"], rec["position_id"]):
-                if eid and eid in entities_by_id and eid not in seen:
-                    seen.add(eid)
-                    f.write(json.dumps(entities_by_id[eid], ensure_ascii=False))
-                    f.write("\n")
-                    n += 1
-    print(f"wrote {n} supporting entit(ies) → {out}")
-
-
 @click.command()
 @click.option(
     "--out-csv",
@@ -284,19 +297,10 @@ def write_ftm(records: list[dict], entities_by_id: dict[str, dict], out: Path) -
     default=DEFAULT_OUT_CSV,
     help="Output golden CSV.",
 )
-@click.option(
-    "--out-ftm",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=DEFAULT_OUT_FTM,
-    help="Output golden FTM stream.",
-)
-def cli(out_csv: Path, out_ftm: Path) -> None:
-    html_keys = load_html_dataset_keys(CATALOG_URL)
-    print(f"{len(html_keys)} HTML dataset(s) in the OpenSanctions catalog")
+def cli(out_csv: Path) -> None:
     peps_path = fetch_peps(PEPS_URL, PEPS_CACHE)
-    records, entities_by_id = build_golden(peps_path, html_keys)
+    records = build_golden(peps_path)
     write_csv(records, out_csv)
-    write_ftm(records, entities_by_id, out_ftm)
 
 
 if __name__ == "__main__":

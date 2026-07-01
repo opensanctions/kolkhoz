@@ -18,7 +18,12 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 ```
 kolkhoz.py         # the CLI: snapshot-csv, extract, export-ftm
 models.py          # SQLAlchemy domain (Page, Extraction, Holder)
+golden_set.py      # build the golden set of PEP holders from the OpenSanctions export
+sample_golden.py   # draw a balanced (profile/roster) eval sample from the golden set
+evaluate.py        # score kolkhoz extractions against a golden sample
 ```
+
+`data/` (gitignored) holds generated files and the cached OpenSanctions export.
 
 ## Conventions
 
@@ -38,6 +43,19 @@ uv sync
 # Run a script
 uv run python some_script.py
 ```
+
+## Evaluation
+
+```bash
+uv run python golden_set.py                                  # build golden set (cached)
+uv run python sample_golden.py                               # → data/golden_sample*
+uv run python kolkhoz.py snapshot-csv data/golden_sample_input.csv
+uv run python kolkhoz.py extract golden_sample_input
+uv run python evaluate.py
+```
+
+See each script's docstring for options. Scoring is exact string equality at
+the (human, position)-pair level.
 
 ## Linting and formatting
 

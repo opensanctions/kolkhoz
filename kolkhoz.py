@@ -242,7 +242,7 @@ def screenshot_reason(text: str, html: str) -> str | None:
 class InputRow(BaseModel):
     """One row of the input CSV: a URL plus its known metadata."""
 
-    institute: str
+    organization: str
     position: str
     url: str
 
@@ -253,7 +253,7 @@ def load_input(path: str) -> list[InputRow]:
         reader = csv.DictReader(f)
         return [
             InputRow(
-                institute=row["institute"].strip(),
+                organization=row["organization"].strip(),
                 position=row["position"].strip(),
                 url=row["url"].strip(),
             )
@@ -282,7 +282,7 @@ async def run_snapshot_csv(
                 session.add(
                     PageRow(
                         url=row.url,
-                        institute=row.institute,
+                        organization=row.organization,
                         position=row.position,
                         dataset=dataset,
                     )
@@ -321,10 +321,10 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
     rows = session.execute(stmt).all()
 
     for holder, extraction, page in rows:
-        # --- Organization: the institute the page is about. ---
+        # --- Organization: the organization the page is about. ---
         org = ftm_model.make_entity("Organization")
-        org.make_id("org", page.dataset, page.url, page.institute)
-        org.add("name", page.institute)
+        org.make_id("org", page.dataset, page.url, page.organization)
+        org.add("name", page.organization)
         org.add("website", page.url)
         bucket[org.id] = bucket.get(org.id, org).merge(org)
 
@@ -345,7 +345,7 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
         person.add("proof", doc.id)
         bucket[person.id] = bucket.get(person.id, person).merge(person)
 
-        # --- Position: the (institute, title) role. ---
+        # --- Position: the (organization, title) role. ---
         position_title = holder.position or page.position
         position = ftm_model.make_entity("Position")
         position.make_id("position", page.dataset, page.url, position_title)

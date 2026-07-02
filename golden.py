@@ -416,7 +416,7 @@ def write_sample_input(
 ) -> None:
     """Write one input row per sampled page for `kolkhoz.py snapshot-csv`.
 
-    institute = the page's (first) dataset key — a stable identifier for the
+    organization = the page's (first) dataset key — a stable identifier for the
                publishing source; we don't have a human publisher name in the
                golden set, and this is what the export joins on.
     position  = the page's modal position (see modal_position).
@@ -425,7 +425,7 @@ def write_sample_input(
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["institute", "position", "url"])
+        writer.writerow(["organization", "position", "url"])
         for page in pages:
             rows = rows_by_page[page]
             dataset = rows[0]["datasets"].split(";")[0]

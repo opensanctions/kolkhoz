@@ -5,14 +5,13 @@ import io
 import logging
 import os
 import random
+import sys
 from datetime import datetime
 from pathlib import Path
 
 import click
 import httpx
 from dotenv import load_dotenv
-from followthemoney import model as ftm_model
-from followthemoney.proxy import EntityProxy
 from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
@@ -125,6 +124,14 @@ Rules:
   positions, return two entries.
 - Only extract humans actually named on the page. Do not invent people.
 - Ignore names that are not position holders (authors, contacts, mentions).
+- Preserve source wording. Do not normalize names, countries, or dates —
+  copy them as written. Dates stay as source strings (e.g. '3 May 2022').
+- Leave any field blank (null, or empty list for evidence) when the page
+  does not state it. Do not infer values from context.
+- For evidence_quotes, lift one or more short, verbatim phrases from the
+  page that support this (person, position) observation. Prefer the
+  sentence that names the person and the role together. If the page only
+  states it in a table or list with no prose, return an empty list.
 """
 
 _INSTRUCTIONS_WITH_SCREENSHOT = """\
@@ -146,6 +153,63 @@ class Holder(BaseModel):
             "organisation and the title omits it, you may name the body. "
             "Omit (null) only if the page names the person but states no "
             "specific title for them."
+        ),
+    )
+    person_dob: str | None = Field(
+        default=None,
+        description=(
+            "The person's date of birth as written on the page (source string, "
+            "no normalization). Null if not stated."
+        ),
+    )
+    person_bio: str | None = Field(
+        default=None,
+        description=(
+            "A short biographical note about the person, taken verbatim or "
+            "near-verbatim from the page. Null if none is given."
+        ),
+    )
+    person_country: str | None = Field(
+        default=None,
+        description=(
+            "Country associated with the person, as written on the page "
+            "(source wording, no territory-code normalization). Null if not stated."
+        ),
+    )
+    position_description: str | None = Field(
+        default=None,
+        description=(
+            "Description of the position as stated on the page, verbatim or "
+            "near-verbatim. Null if none is given."
+        ),
+    )
+    position_jurisdiction: str | None = Field(
+        default=None,
+        description=(
+            "Jurisdiction the position operates in, as written on the page "
+            "(source wording, no normalization). Null if not stated."
+        ),
+    )
+    position_start_date: str | None = Field(
+        default=None,
+        description=(
+            "When the person started in this position, as written on the page "
+            "(source string, no normalization). Null if not stated."
+        ),
+    )
+    position_end_date: str | None = Field(
+        default=None,
+        description=(
+            "When the person left (or will leave) this position, as written on "
+            "the page (source string, no normalization). Null if not stated."
+        ),
+    )
+    evidence_quotes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "One or more short quotes lifted verbatim from the page that "
+            "support this (person, position) observation. Empty list if the "
+            "page states it only in a table or list with no prose."
         ),
     )
 
@@ -291,17 +355,37 @@ async def run_snapshot_csv(
     log.info("wrote %d page(s) → %s", len(rows), os.environ["KOLKHOZ_DB"])
 
 
-def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
-    """Build a list of Followthemoney entity dicts from the database.
+# The wide CSV format handed to zavod. One row per (person, position)
+# observation extracted from one snapshot. Fixed column order, UTF-8,
+# source wording preserved (no FtM normalization — that is zavod's job).
+EXPORT_COLUMNS = [
+    "dataset",
+    "source_url",
+    "snapshot_id",
+    "snapshot_retrieved_at",
+    "organisation_name",
+    "person_name",
+    "person_dob",
+    "person_bio",
+    "person_country",
+    "position_name",
+    "position_description",
+    "position_jurisdiction",
+    "position_start_date",
+    "position_end_date",
+    "evidence_quotes",
+]
 
-    Emits Organization, Position, Person, Occupancy, and Document entities,
-    deduplicated and merged by id. Only the latest extraction per page is
-    exported, so re-running extraction doesn't multiply the output.
+
+def build_export_rows(
+    session, dataset: str | None = None
+) -> list[tuple[PageRow, ExtractionRow, HolderRow]]:
+    """Collect the latest-extraction holders as export rows.
+
+    Only the most recent extraction per page is exported, so re-running
+    extraction doesn't multiply the output. Returns (page, extraction,
+    holder) triples in no particular order.
     """
-    bucket: dict[str, EntityProxy] = {}
-
-    # The latest Extraction per page: we only export the most recent read of
-    # each page, so re-running extraction doesn't multiply the output.
     latest = (
         select(
             ExtractionRow.page_id.label("page_id"),
@@ -318,54 +402,37 @@ def build_ftm_entities(session, dataset: str | None = None) -> list[dict]:
     )
     if dataset is not None:
         stmt = stmt.where(PageRow.dataset == dataset)
-    rows = session.execute(stmt).all()
+    return [
+        (page, extraction, holder)
+        for holder, extraction, page in session.execute(stmt).all()
+    ]
 
-    for holder, extraction, page in rows:
-        # --- Organization: the organization the page is about. ---
-        org = ftm_model.make_entity("Organization")
-        org.make_id("org", page.dataset, page.url, page.organization)
-        org.add("name", page.organization)
-        org.add("website", page.url)
-        bucket[org.id] = bucket.get(org.id, org).merge(org)
 
-        # --- Document: the Pravda snapshot this holder was read from. ---
-        doc = ftm_model.make_entity("Document")
-        doc.make_id("pravda", page.dataset, page.url, extraction.snapshot_id)
-        doc.add("title", page.url)
-        doc.add("sourceUrl", page.url)
-        doc.add("notes", f"Pravda snapshot {extraction.snapshot_id}")
-        doc.add("author", extraction.model)
-        bucket[doc.id] = bucket.get(doc.id, doc).merge(doc)
+def holder_to_row(
+    page: PageRow, extraction: ExtractionRow, holder: HolderRow
+) -> dict[str, str]:
+    """Flatten one holder observation into a CSV row dict.
 
-        # --- Person: the named human. ---
-        person = ftm_model.make_entity("Person")
-        person.make_id("person", page.dataset, page.url, holder.human)
-        person.add("name", holder.human)
-        person.add("sourceUrl", page.url)
-        person.add("proof", doc.id)
-        bucket[person.id] = bucket.get(person.id, person).merge(person)
-
-        # --- Position: the (organization, title) role. ---
-        position_title = holder.position or page.position
-        position = ftm_model.make_entity("Position")
-        position.make_id("position", page.dataset, page.url, position_title)
-        position.add("name", position_title)
-        position.add("organization", org.id)
-        position.add("sourceUrl", page.url)
-        bucket[position.id] = bucket.get(position.id, position).merge(position)
-
-        # --- Occupancy: this person holding this position. ---
-        occupancy = ftm_model.make_entity("Occupancy")
-        occupancy.make_id("occupancy", page.dataset, page.url, person.id, position.id)
-        occupancy.add("holder", person.id)
-        occupancy.add("post", position.id)
-        occupancy.add("status", "current")
-        occupancy.add("date", extraction.extracted_at.date().isoformat())
-        occupancy.add("sourceUrl", page.url)
-        occupancy.add("proof", doc.id)
-        bucket[occupancy.id] = bucket.get(occupancy.id, occupancy).merge(occupancy)
-
-    return [entity.to_dict() for entity in bucket.values()]
+    ``evidence_quotes`` (a list) is joined with newlines. ``position_name``
+    falls back to the page-level position when the model left it blank.
+    """
+    return {
+        "dataset": page.dataset,
+        "source_url": page.url,
+        "snapshot_id": extraction.snapshot_id,
+        "snapshot_retrieved_at": extraction.snapshot_retrieved_at.isoformat(),
+        "organisation_name": page.organization,
+        "person_name": holder.human,
+        "person_dob": holder.person_dob or "",
+        "person_bio": holder.person_bio or "",
+        "person_country": holder.person_country or "",
+        "position_name": holder.position or page.position,
+        "position_description": holder.position_description or "",
+        "position_jurisdiction": holder.position_jurisdiction or "",
+        "position_start_date": holder.position_start_date or "",
+        "position_end_date": holder.position_end_date or "",
+        "evidence_quotes": "\n".join(holder.evidence_quotes),
+    }
 
 
 @click.group()
@@ -479,13 +546,27 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
             extraction_row = ExtractionRow(
                 page_id=page.id,
                 snapshot_id=snapshot["id"],
+                snapshot_retrieved_at=datetime.fromisoformat(
+                    snapshot["captured_at"].replace("Z", "+00:00")
+                ),
                 model=os.environ["OPENAI_MODEL"],
                 extracted_at=datetime.now(),
                 page_type=extraction.page_type,
             )
             for h in holders:
                 extraction_row.holders.append(
-                    HolderRow(human=h["human"], position=h["position"])
+                    HolderRow(
+                        human=h["human"],
+                        position=h["position"],
+                        person_dob=h["person_dob"],
+                        person_bio=h["person_bio"],
+                        person_country=h["person_country"],
+                        position_description=h["position_description"],
+                        position_jurisdiction=h["position_jurisdiction"],
+                        position_start_date=h["position_start_date"],
+                        position_end_date=h["position_end_date"],
+                        evidence_quotes=h["evidence_quotes"],
+                    )
                 )
             session.add(extraction_row)
 
@@ -502,12 +583,11 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
 
 
 @cli.command(
-    "export-ftm",
+    "export-csv",
     help=(
-        "Export extracted holders to a Followthemoney "
-        "(followthemoney.tech) entity stream. Writes one JSON entity per "
-        "line (the ijson stream format used by the `ftm` CLI) to the "
-        "output file, or stdout if none is given."
+        "Export extracted holders to the wide CSV format consumed by zavod. "
+        "Writes one CSV per dataset to the output directory, "
+        "or to stdout if no directory is given (single combined stream)."
     ),
 )
 @click.option(
@@ -516,21 +596,53 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
 @click.option(
     "-o",
     "--output",
-    type=click.File("w"),
-    default="-",
-    help="Output file (default: stdout).",
+    type=click.Path(file_okay=False, dir_okay=True, writable=True),
+    default=None,
+    help="Output directory (one CSV per dataset). Default: stdout.",
 )
-def export_ftm_cmd(dataset: str | None, output) -> None:
-    import json
-
+def export_csv_cmd(dataset: str | None, output: str | None) -> None:
     with Session() as session:
-        entities = build_ftm_entities(session, dataset)
+        rows = build_export_rows(session, dataset)
 
-    for entity in entities:
-        output.write(json.dumps(entity, ensure_ascii=False))
-        output.write("\n")
-    output.flush()
-    log.info("exported %d entit(ies)", len(entities))
+    groups: dict[str, list[tuple[PageRow, ExtractionRow, HolderRow]]] = {}
+    for page, extraction, holder in rows:
+        groups.setdefault(page.dataset, []).append((page, extraction, holder))
+
+    def write_stream(fh) -> None:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=EXPORT_COLUMNS,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
+        writer.writeheader()
+        for page, extraction, holder in rows:
+            writer.writerow(holder_to_row(page, extraction, holder))
+        fh.flush()
+
+    if output is None:
+        write_stream(sys.stdout)
+        log.info("exported %d row(s)", len(rows))
+        return
+
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    total = 0
+    for group, group_rows in groups.items():
+        path = out_dir / f"{group}.csv"
+        with open(path, "w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=EXPORT_COLUMNS,
+                extrasaction="ignore",
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            for page, extraction, holder in group_rows:
+                writer.writerow(holder_to_row(page, extraction, holder))
+        total += len(group_rows)
+        log.info("wrote %d row(s) → %s", len(group_rows), path)
+    log.info("exported %d row(s) across %d dataset(s)", total, len(groups))
 
 
 if __name__ == "__main__":

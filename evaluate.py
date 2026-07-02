@@ -12,7 +12,7 @@ faithfully, not whether two near-identical strings should count as the same.
 
 The position on an extracted pair is `holder.position`, falling back to the
 input-CSV position on the Page when the extractor left it null — the same
-rule `kolkhoz.py build_ftm_entities` applies at export time, so a pair scored
+rule `kolkhoz.py holder_to_row` applies at export time, so a pair scored
 here is exactly the pair that would be emitted.
 
 Scores are reported in four dimensions, each as micro/macro precision, recall
@@ -73,7 +73,7 @@ def load_golden(golden_csv: Path) -> dict[str, set[tuple[str, str]]]:
 def load_extracted(dataset: str) -> dict[str, set[tuple[str, str]]]:
     """Read the latest extraction per page for a dataset, as (human, position) pairs.
 
-    Mirrors the `latest` subquery in `kolkhoz.py build_ftm_entities`: only the
+    Mirrors the `latest` subquery in `kolkhoz.py build_export_rows`: only the
     most recent extraction of each page is scored. Position is the holder's
     own title, or the Page's input-CSV position when the extractor left it
     null.

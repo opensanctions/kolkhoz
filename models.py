@@ -20,7 +20,7 @@ Three tables:
 import enum
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy import ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -61,6 +61,8 @@ class Extraction(Base):
     )
     # Pravda snapshot this extraction read from. The evidence.
     snapshot_id: Mapped[str]
+    # When Pravda captured the snapshot we extracted from (snapshot.captured_at).
+    snapshot_retrieved_at: Mapped[datetime]
     model: Mapped[str]
     extracted_at: Mapped[datetime]
     page_type: Mapped[PageType]
@@ -81,5 +83,16 @@ class Holder(Base):
     human: Mapped[str]
     # May be null on the page; filled from Page.position at write time.
     position: Mapped[str | None]
+    # All fields below are source wording, verbatim. Dates are source strings.
+    # Blank (None) when the page does not state them.
+    person_dob: Mapped[str | None]
+    person_bio: Mapped[str | None]
+    person_country: Mapped[str | None]
+    position_description: Mapped[str | None]
+    position_jurisdiction: Mapped[str | None]
+    position_start_date: Mapped[str | None]
+    position_end_date: Mapped[str | None]
+    # One or more supporting quotes lifted from the page, verbatim.
+    evidence_quotes: Mapped[list[str]] = mapped_column(JSON)
 
     extraction: Mapped[Extraction] = relationship(back_populates="holders")

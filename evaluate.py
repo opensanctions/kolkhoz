@@ -71,6 +71,12 @@ log = logging.getLogger("evaluate")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
+# Vendored TrueType for the synthetic screenshot renderer. Pillow's bundled
+# default font lacks Latin-Extended glyphs (tofu for names like Dvořák / João /
+# Wójcik), so we ship DejaVu Sans (permissive Bitstream-Vera-derived license;
+# see assets/LICENSE), which covers the full range the fixtures use.
+FONT_PATH = Path(__file__).parent / "assets" / "DejaVuSans.ttf"
+
 
 # ===========================================================================
 # Schema — the authored ground truth, loaded from JSON
@@ -162,8 +168,8 @@ def render_screenshot(html: str) -> bytes:
     reading holders from pixels) without a headless browser.
     """
     soup = BeautifulSoup(html, "html.parser")
-    font = ImageFont.load_default(size=24)
-    head_font = ImageFont.load_default(size=32)
+    font = ImageFont.truetype(str(FONT_PATH), 24)
+    head_font = ImageFont.truetype(str(FONT_PATH), 32)
     margin = 40
     width = 1000
     gap = 14

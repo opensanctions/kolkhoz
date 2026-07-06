@@ -18,19 +18,17 @@ data, not the chrome.
 
 Scope is deliberately narrow:
 
-- **Two modes, one per fixture.** Each fixture is either ``text`` (the
-  default) or ``screenshot``. A ``text`` fixture renders to HTML, derives the
-  plaintext, and calls ``extract(text, None)`` — the text-only path. A
-  ``screenshot`` fixture additionally rasterizes that same HTML to a PNG with
-  PIL (a mini-renderer for the one template ``render_html`` emits, not a
-  general HTML engine) and calls ``extract(text, screenshot_blob)`` — the
-  screenshot path: image tiling, base64 encoding, and the model reading
-  holders from pixels. Because the screenshot is rendered from the same roster
-  the text comes from, a correct extraction still recovers every holder, so a
-  screenshot fixture is a clean pass/fail on the image plumbing rather than an
-  OCR-hardship test. The genuinely hard case (names baked into real
-  photographs, org charts, headshot rosters) stays out of reach — a future
-  fixture class.
+- **Two modes, one per fixture.** Each fixture is ``text`` (the default) or
+  ``image``. A ``text`` fixture renders to HTML, derives the plaintext, and
+  calls ``extract(text, None)`` — the text-only path. An ``image`` fixture
+  passes only thin text (the organization name — no holder names) plus a
+  rasterized roster PNG (a mini-renderer for the one roster layout, not a
+  general HTML engine), so the model must read every holder from the image.
+  There is no "text and screenshot both present" mode: in production the
+  screenshot is attached *only* when the text is insufficient
+  (``kolkhoz.screenshot_reason`` fires on thin or image-dense text), so that
+  combination never occurs and is not worth testing. The ``image`` fixture is
+  the faithful mirror of that trigger — thin text in, holders out of pixels.
 
 - **(human, position) pairs only**, scored per fixture by exact string
   equality. Richer fields (dob, bio, dates) can be added once fixtures carry
@@ -99,16 +97,18 @@ class SyntheticPage(BaseModel):
     (human, position) pairs a correct extraction returns. ``extra_html`` is
     unstructured noise (footers, contact lines, history) sprinkled into the
     rendered page to test precision against distractors. ``mode`` picks the
-    pipeline path: ``text`` (default) sends plaintext only; ``screenshot``
-    also rasterizes the rendered HTML to a PNG and attaches it, exercising
-    the image path of ``extract``.
+    pipeline path: ``text`` (default) sends the rendered plaintext only;
+    ``image`` sends only thin text (the organization name) plus a rasterized
+    roster PNG, so every holder must be read from pixels — the production
+    "thin text" case, and the only situation in which the screenshot path
+    runs.
     """
 
     id: str
     organization: str
     holders: list[SyntheticHolder] = Field(default_factory=list)
     extra_html: str = ""
-    mode: Literal["text", "screenshot"] = "text"
+    mode: Literal["text", "image"] = "text"
 
 
 # ===========================================================================
@@ -156,18 +156,19 @@ def html_to_text(html: str) -> str:
     return " ".join(soup.get_text(separator=" ").split())
 
 
-def render_screenshot(html: str) -> bytes:
-    """Rasterize a page's HTML to a PNG the model reads as pixels.
+def render_screenshot(page: SyntheticPage) -> bytes:
+    """Rasterize a page's roster to a PNG the model reads as pixels.
 
-    A mini-renderer for the single template ``render_html`` emits — the
-    organization ``<h1>``, an optional Name/Position ``<table>``, then any
-    stray block text from ``extra_html`` — not a general HTML engine. Two
-    passes: measure to size the canvas, then draw, so the image is exactly as
-    tall as its content. Used only by ``mode="screenshot"`` fixtures to drive
-    the screenshot path of the pipeline (image tiling, encoding, the model
-    reading holders from pixels) without a headless browser.
+    A mini-renderer for the single roster layout — the organization name as a
+    heading, an optional Name/Position table of the holders, then any stray
+    block text from ``extra_html`` — not a general HTML engine. Two passes:
+    measure to size the canvas, then draw, so the image is exactly as tall as
+    its content. Page-driven (not HTML-driven) so the screenshot can carry the
+    holders even when the page text is told they are absent
+    (``mode="image"``). Used by ``image`` fixtures to drive the image path of
+    the pipeline (tiling, encoding, reading holders from pixels) without a
+    headless browser.
     """
-    soup = BeautifulSoup(html, "html.parser")
     font = ImageFont.truetype(str(FONT_PATH), 24)
     head_font = ImageFont.truetype(str(FONT_PATH), 32)
     margin = 40
@@ -196,24 +197,17 @@ def render_screenshot(html: str) -> bytes:
             out.append(cur)
         return out or [""]
 
-    # Pull the pieces the known template emits out of the DOM.
-    head_el = soup.find("h1")
-    head = head_el.get_text(strip=True) if head_el else ""
-    rows: list[tuple[str, str]] = []
-    table = soup.find("table")
-    if table:
-        for tr in table.find_all("tr"):
-            cells = [td.get_text(strip=True) for td in tr.find_all("td")]
-            if len(cells) == 2:
-                rows.append((cells[0], cells[1]))
+    # Pull the roster straight off the page (not its HTML) so the screenshot
+    # can carry the holders even when the text path is told they are absent.
+    head = page.organization
+    rows = [(h.human, h.position) for h in page.holders]
     distractors: list[str] = []
-    body = soup.body or soup
-    for child in body.children:
-        if getattr(child, "name", None) in (None, "h1", "table"):
-            continue
-        txt = child.get_text(separator=" ", strip=True)
-        if txt:
-            distractors.append(txt)
+    if page.extra_html:
+        extra = BeautifulSoup(page.extra_html, "html.parser")
+        for child in extra.children:
+            txt = child.get_text(separator=" ", strip=True)
+            if txt:
+                distractors.append(txt)
 
     # Pass 1: lay out (text, x, font, y) ops against a running y cursor.
     ops: list[tuple[str, int, ImageFont.ImageFont, int]] = []
@@ -317,9 +311,16 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
     """Render → extract → score each fixture, then print a summary table."""
     rows: list[tuple[SyntheticPage, set, set, int, int, int]] = []
     for page in fixtures:
-        html = render_html(page)
-        text = html_to_text(html)
-        screenshot_blob = render_screenshot(html) if page.mode == "screenshot" else None
+        if page.mode == "image":
+            # Names live only in the screenshot; the page text is just the
+            # organization name — the "thin text" case that fires the
+            # screenshot path in production. The model must read holders
+            # from pixels.
+            text = page.organization
+            screenshot_blob = render_screenshot(page)
+        else:
+            text = html_to_text(render_html(page))
+            screenshot_blob = None
         extraction = extract(text, screenshot_blob)
 
         expected = {(h.human, h.position) for h in page.holders}

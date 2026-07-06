@@ -51,10 +51,10 @@ import json
 import logging
 import sys
 from html import escape
-from html.parser import HTMLParser
 from pathlib import Path
 
 import click
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from kolkhoz import extract
@@ -127,65 +127,15 @@ def render_html(page: SyntheticPage) -> str:
     return "".join(parts)
 
 
-# Block-level tags that should break the plaintext onto a new line. Cells and
-# rows included so a roster table reads as one holder per line pair.
-_BLOCK_TAGS = {
-    "p",
-    "br",
-    "div",
-    "li",
-    "tr",
-    "td",
-    "th",
-    "h1",
-    "h2",
-    "h3",
-    "h4",
-    "ul",
-    "ol",
-    "table",
-    "section",
-    "header",
-    "footer",
-}
-
-
-class _TextExtractor(HTMLParser):
-    """Naive but sane HTML → text: strip tags, newlines around block elements."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._pieces: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs) -> None:
-        if tag in _BLOCK_TAGS:
-            self._pieces.append("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in _BLOCK_TAGS:
-            self._pieces.append("\n")
-
-    def handle_data(self, data: str) -> None:
-        self._pieces.append(data)
-
-    def text(self) -> str:
-        raw = "".join(self._pieces)
-        lines = [ln.strip() for ln in raw.splitlines()]
-        return "\n".join(ln for ln in lines if ln)
-
-
 def html_to_text(html: str) -> str:
     """Derive the plaintext the model reads from rendered HTML.
 
-    This stands in for Pravda's plaintext extraction. It is deliberately a
-    simple tag-strip rather than a hand-authored string: we want the text to
-    faithfully reflect the HTML content, deterministically, so the test
-    measures the model's reading — not our ability to write two consistent
-    copies of the same page.
+    ``get_text`` is a ``textContent``-style walk — it returns all text in the
+    DOM regardless of CSS, unlike ``inner_text`` which drops anything not
+    visibly rendered (opensanctions/pravda#14).
     """
-    parser = _TextExtractor()
-    parser.feed(html)
-    return parser.text()
+    soup = BeautifulSoup(html, "html.parser")
+    return " ".join(soup.get_text(separator=" ").split())
 
 
 # ===========================================================================

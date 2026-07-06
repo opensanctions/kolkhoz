@@ -5,6 +5,7 @@ description = "Orchestrate web capture and LLM extraction of political position 
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.15.0",
     "click>=8.4.1",
     "httpx>=0.28.1",
     "openai>=2.41.1",

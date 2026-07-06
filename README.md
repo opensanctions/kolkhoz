@@ -11,7 +11,7 @@ Early R&D. Currently exploring what a viable automated extraction pipeline looks
 1. Sends URLs to Pravda for snapshotting (plaintext + rendered HTML + screenshot)
 2. Feeds snapshots to an LLM to extract structured "human / position" pairs
 3. Stores results in SQLite, linked to Pravda snapshot identifiers
-4. Exports the extracted holders as a [FtM](https://followthemoney.tech) entity stream (Organization, Position, Person, Occupancy, Document)
+4. Exports the extracted holders as a flat CSV (one row per person/position observation), shaped for ingest by zavod
 
 ## Setup
 
@@ -35,22 +35,18 @@ uv run python kolkhoz.py extract
 uv run python kolkhoz.py extract -d hio_leadership   # one dataset only
 uv run python kolkhoz.py extract -n 20               # random sample of 20
 
-# Export extracted holders as a Followthemoney entity stream
-uv run python kolkhoz.py export-ftm -o kolkhoz.ftm
-uv run python kolkhoz.py export-ftm -d hio_leadership -o hio.ftm
+# Export extracted holders as a flat CSV (stdout if no -o directory is given)
+uv run python kolkhoz.py export-csv -o data/exports
+uv run python kolkhoz.py export-csv -d hio_leadership -o data/exports
 ```
 
 ## Evaluation
 
-Score extractions against ground truth from the [OpenSanctions](https://opensanctions.org) PEP export:
+Score the extraction pipeline against hand-authored synthetic fixtures in `evaluate.py`. Each fixture is an authored page with a known set of holders; the harness renders it to HTML, derives the plaintext, runs the real `extract()`, and scores the returned (human, position) pairs by exact string equality.
 
 ```bash
-uv run python golden.py build                                      # build golden set (cached)
-uv run python golden.py sample                                     # → data/golden_sample*
-uv run python kolkhoz.py snapshot-csv data/golden_sample_input.csv
-uv run python kolkhoz.py extract golden_sample_input
-uv run python evaluate.py
+uv run python evaluate.py   # run all fixtures
+uv run python evaluate.py -v # show expected pairs
 ```
 
-The defaults chain end-to-end. Matching is exact string equality at the
-(human, position)-pair level. `data/` is gitignored.
+`data/` is gitignored.

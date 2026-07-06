@@ -1,0 +1,9 @@
+{
+  "organization": "Riverside City Council",
+  "holders": [
+    {"human": "Lucia Fernández", "position": "Mayor"},
+    {"human": "David Kim", "position": "Deputy Mayor"},
+    {"human": "Fatima Al-Sayed", "position": "Councillor"}
+  ],
+  "extra_html": "<footer><p>For inquiries, contact the city registrar Robert Pine at info@riverside.gov.</p></footer>"
+}

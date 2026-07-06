@@ -1,281 +1,338 @@
-"""Score kolkhoz extractions against a golden sample.
+"""Score the extraction pipeline against hand-authored synthetic fixtures.
 
-The golden set (`golden.py sample`) is one row per (page, human, position)
-that OpenSanctions recorded for the page. The extraction pipeline writes one
-`Holder(human, position)` per latest Extraction per Page. This script joins
-the two on the page URL and scores them.
+The pipeline is meant to read holders *verbatim* from a page — names, titles,
+dates copied as written. Scoring it against a third-party golden set does not
+work: those sets come from scrapers that have already normalized (title-cased
+names, expanded role codes, merged variants), so a faithful verbatim
+extraction fails while a normalized guess passes. Here we own both ends
+instead: each fixture is an authored page whose holders we know exactly. The
+harness renders it to HTML, derives the plaintext the model reads, runs the
+real ``kolkhoz.extract``, and scores the returned (human, position) pairs
+against what we put in. Exact-match is honest again.
 
-Matching is exact string equality. No normalization, no fuzzy matching: the
-golden side and the extraction side read different copies of the same page, so
-the question we want to answer is whether the model read the names and titles
-faithfully, not whether two near-identical strings should count as the same.
+Fixtures live as JSON in ``fixtures/`` (one file per page: an organization, a
+list of holders, and optional distractor HTML). The filename stem is the
+fixture id. Every fixture renders through the same single layout — a roster
+table of its holders — so the only thing that varies between cases is the
+data, not the chrome.
 
-The position on an extracted pair is `holder.position`, falling back to the
-input-CSV position on the Page when the extractor left it null — the same
-rule `kolkhoz.py holder_to_row` applies at export time, so a pair scored
-here is exactly the pair that would be emitted.
+Scope is deliberately narrow:
 
-Scores are reported in four dimensions, each as micro/macro precision, recall
-and F1:
+- **Text path only.** ``extract()`` is a text-reading task; the screenshot is
+  only attached by ``screenshot_reason`` for thin-text or image-dense pages,
+  and a screenshot rendered from our own clean HTML would carry the identical
+  information as pixels — testing nothing the text doesn't. The genuinely hard
+  screenshot case (names baked into real images) can't be synthesized without
+  drawing text into images, so we don't pretend. The harness always calls
+  ``extract(text, None)``; the screenshot path is validated separately against
+  real captures.
 
-* **pairs**     — the (human, position) pair, as before. The strict end-to-end
-                  metric.
-* **count**     — did we find the right *number* of holders? Treats holders as
-                  anonymous: TP = min(golden, extracted), the rest is FP/FN.
-                  Tells us whether the model over- or under-counts, independent
-                  of name/position normalization.
-* **human**     — human names only, as sets per page. Isolates name reading
-                  from position reading.
-* **position**  — position titles only, as sets per page. Isolates position
-                  reading from name reading.
+- **(human, position) pairs only**, scored per fixture by exact string
+  equality. Richer fields (dob, bio, dates) can be added once fixtures carry
+  them. ``page_type`` is part of kolkhoz's extraction output but is not scored
+  or reported here.
+
+- **Hand-authored fixtures.** Each is a deliberate, legible case that probes
+  one behavior: clean recall, distractor precision, verbatim preservation of
+  non-ASCII names, hallucination resistance on a holder-free page, one person
+  holding two titles, and roster completeness at scale.
+
+The harness calls the real model via ``kolkhoz.extract`` (it spends tokens and
+reads ``.env``) and is fully decoupled from Pravda and the database: no
+snapshots, no Pages, no Extractions on disk — just render, extract, score.
 
 Usage:
 
-    uv run python evaluate.py                          # golden_sample.csv vs the
-                                                       # golden_sample_input dataset
-    uv run python evaluate.py -d golden_sample_input -g data/golden_sample.csv
+    uv run python evaluate.py    # run all fixtures in fixtures/
+    uv run python evaluate.py -v # per-fixture detail
 """
 
-import csv
+import json
+import logging
 import sys
+from html import escape
+from html.parser import HTMLParser
 from pathlib import Path
 
 import click
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field
 
-from kolkhoz import Session
-from models import Extraction as ExtractionRow
-from models import Holder as HolderRow
-from models import Page as PageRow
+from kolkhoz import extract
 
-DEFAULT_GOLDEN = Path("data/golden_sample.csv")
-DEFAULT_DATASET = "golden_sample_input"
-DEFAULT_OUT = Path("data/golden_sample_eval.csv")
+log = logging.getLogger("evaluate")
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
-def load_golden(golden_csv: Path) -> dict[str, set[tuple[str, str]]]:
-    """Read the golden CSV, keyed by page, into sets of (human, position).
+# ===========================================================================
+# Schema — the authored ground truth, loaded from JSON
+# ===========================================================================
 
-    Position is required: golden rows with a blank position can't form a pair
-    and are skipped. Duplicate pairs on a page collapse into one.
+
+class SyntheticHolder(BaseModel):
+    """A single (human, position) pair the page states and we expect back."""
+
+    human: str
+    position: str
+
+
+class SyntheticPage(BaseModel):
+    """One authored page: the org it is about, the holders it names, and any
+    distractor HTML that must *not* be extracted.
+
+    ``id`` is the JSON filename stem; the file *is* the fixture, so there is no
+    id field in the JSON itself. ``holders`` is the answer key — exactly the
+    (human, position) pairs a correct extraction returns. ``extra_html`` is
+    unstructured noise (footers, contact lines, history) sprinkled into the
+    rendered page to test precision against distractors.
     """
-    pairs_by_page: dict[str, set[tuple[str, str]]] = {}
-    with open(golden_csv) as f:
-        for row in csv.DictReader(f):
-            human = row["human"].strip()
-            position = row["position"].strip()
-            if not human or not position:
-                continue
-            pairs_by_page.setdefault(row["page"], set()).add((human, position))
-    return pairs_by_page
+
+    id: str
+    organization: str
+    holders: list[SyntheticHolder] = Field(default_factory=list)
+    extra_html: str = ""
 
 
-def load_extracted(dataset: str) -> dict[str, set[tuple[str, str]]]:
-    """Read the latest extraction per page for a dataset, as (human, position) pairs.
+# ===========================================================================
+# Rendering — one layout (a roster table) → HTML → plaintext
+# ===========================================================================
 
-    Mirrors the `latest` subquery in `kolkhoz.py build_export_rows`: only the
-    most recent extraction of each page is scored. Position is the holder's
-    own title, or the Page's input-CSV position when the extractor left it
-    null.
+
+def render_html(page: SyntheticPage) -> str:
+    """Render a page to standalone HTML through a single roster layout.
+
+    Holders become a Name/Position table; a holder-free page renders no table
+    (just the organization header and any distractor HTML). The model reads
+    the derived plaintext, so what varies the reading task between fixtures is
+    the data, not the markup.
     """
-    latest = (
-        select(
-            ExtractionRow.page_id.label("page_id"),
-            func.max(ExtractionRow.id).label("extraction_id"),
+    parts = [
+        "<!DOCTYPE html>",
+        "<html><head><meta charset='utf-8'>",
+        f"<title>{escape(page.organization)}</title></head><body>",
+        f"<h1>{escape(page.organization)}</h1>",
+    ]
+    if page.holders:
+        parts.append(
+            "<table><thead><tr><th>Name</th><th>Position</th></tr></thead><tbody>"
         )
-        .group_by(ExtractionRow.page_id)
-        .subquery()
-    )
-    stmt = (
-        select(HolderRow, PageRow)
-        .join(latest, HolderRow.extraction_id == latest.c.extraction_id)
-        .join(ExtractionRow, HolderRow.extraction_id == ExtractionRow.id)
-        .join(PageRow, ExtractionRow.page_id == PageRow.id)
-        .where(PageRow.dataset == dataset)
-    )
-    pairs_by_page: dict[str, set[tuple[str, str]]] = {}
-    with Session() as session:
-        for holder, page in session.execute(stmt).all():
-            position = holder.position or page.position
-            pairs_by_page.setdefault(page.url, set()).add((holder.human, position))
-    return pairs_by_page
+        for h in page.holders:
+            parts.append(
+                f"<tr><td>{escape(h.human)}</td><td>{escape(h.position)}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    if page.extra_html:
+        parts.append(page.extra_html)
+    parts.append("</body></html>")
+    return "".join(parts)
+
+
+# Block-level tags that should break the plaintext onto a new line. Cells and
+# rows included so a roster table reads as one holder per line pair.
+_BLOCK_TAGS = {
+    "p",
+    "br",
+    "div",
+    "li",
+    "tr",
+    "td",
+    "th",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "ul",
+    "ol",
+    "table",
+    "section",
+    "header",
+    "footer",
+}
+
+
+class _TextExtractor(HTMLParser):
+    """Naive but sane HTML → text: strip tags, newlines around block elements."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._pieces: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in _BLOCK_TAGS:
+            self._pieces.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _BLOCK_TAGS:
+            self._pieces.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        self._pieces.append(data)
+
+    def text(self) -> str:
+        raw = "".join(self._pieces)
+        lines = [ln.strip() for ln in raw.splitlines()]
+        return "\n".join(ln for ln in lines if ln)
+
+
+def html_to_text(html: str) -> str:
+    """Derive the plaintext the model reads from rendered HTML.
+
+    This stands in for Pravda's plaintext extraction. It is deliberately a
+    simple tag-strip rather than a hand-authored string: we want the text to
+    faithfully reflect the HTML content, deterministically, so the test
+    measures the model's reading — not our ability to write two consistent
+    copies of the same page.
+    """
+    parser = _TextExtractor()
+    parser.feed(html)
+    return parser.text()
+
+
+# ===========================================================================
+# Scoring — (human, position) pairs, exact match, micro/macro
+# ===========================================================================
 
 
 def prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
-    """Precision / recall / F1 from raw confusion counts."""
     precision = tp / (tp + fp) if (tp + fp) else 0.0
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
     return precision, recall, f1
 
 
-def set_confusion(golden: set, extracted: set) -> tuple[int, int, int]:
-    """TP/FP/FN for set equality: intersection, extras, misses."""
-    tp = len(golden & extracted)
-    fp = len(extracted - golden)
-    fn = len(golden - extracted)
+def score_page(
+    expected: set[tuple[str, str]], got: set[tuple[str, str]]
+) -> tuple[int, int, int]:
+    """TP/FP/FN for exact set equality of (human, position) pairs."""
+    tp = len(expected & got)
+    fp = len(got - expected)
+    fn = len(expected - got)
     return tp, fp, fn
 
 
-def count_confusion(golden: int, extracted: int) -> tuple[int, int, int]:
-    """TP/FP/FN for an anonymous-count match (holders indistinguishable).
+def page_prf(
+    expected: set[tuple[str, str]], got: set[tuple[str, str]]
+) -> tuple[float, float, float]:
+    """Per-fixture P/R/F1, scoring empty-agreement as perfect.
 
-    TP is how many holders we can pair up by count; the surplus on either side
-    is FP (over-counted) or FN (under-counted).
+    A holder-free page (expected empty) that extracts nothing is a correct
+    result, but ``prf`` returns 0.0 when there are no positives on either
+    side. Treat that case as a flawless 1.0/1.0/1.0 so it does not drag down
+    the macro average. Micro is unaffected: it sums raw TP/FP/FN, where an
+    empty page correctly contributes nothing.
     """
-    tp = min(golden, extracted)
-    fp = max(0, extracted - golden)
-    fn = max(0, golden - extracted)
-    return tp, fp, fn
+    if not expected and not got:
+        return 1.0, 1.0, 1.0
+    tp, fp, fn = score_page(expected, got)
+    return prf(tp, fp, fn)
 
 
-def report(title: str, page_stats: dict[str, tuple[int, int, int]]) -> None:
-    """Print a micro/macro precision-recall-F1 table for one scoring dimension.
+# ===========================================================================
+# Loading
+# ===========================================================================
 
-    `page_stats` maps each page to its (TP, FP, FN) for that dimension.
-    """
-    tp = sum(s[0] for s in page_stats.values())
-    fp = sum(s[1] for s in page_stats.values())
-    fn = sum(s[2] for s in page_stats.values())
+
+def load_fixtures(fixtures_dir: Path) -> list[SyntheticPage]:
+    """Load every ``*.json`` in ``fixtures_dir``, id = filename stem."""
+    pages: list[SyntheticPage] = []
+    for path in sorted(fixtures_dir.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        pages.append(SyntheticPage(id=path.stem, **data))
+    return pages
+
+
+# ===========================================================================
+# Run
+# ===========================================================================
+
+
+def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
+    """Render → extract → score each fixture, then print a summary table."""
+    rows: list[tuple[SyntheticPage, set, set, int, int, int]] = []
+    for page in fixtures:
+        text = html_to_text(render_html(page))
+        extraction = extract(text, None)
+
+        expected = {(h.human, h.position) for h in page.holders}
+        got = {(h.human, h.position) for h in extraction.holders}
+        tp, fp, fn = score_page(expected, got)
+        rows.append((page, expected, got, tp, fp, fn))
+
+        log.info("%s: %d holder(s)", page.id, len(extraction.holders))
+
+    # ---- per-fixture table ------------------------------------------------
+    print(file=sys.stderr)
+    print(f"{'fixture':20} {'TP':>3} {'FP':>3} {'FN':>3}  notes", file=sys.stderr)
+    print("-" * 78, file=sys.stderr)
+    for page, expected, got, tp, fp, fn in rows:
+        notes: list[str] = []
+        if fp:
+            notes.append(
+                "extra: " + "; ".join(f"{h} ({p})" for h, p in sorted(got - expected))
+            )
+        if fn:
+            notes.append(
+                "missed: " + "; ".join(f"{h} ({p})" for h, p in sorted(expected - got))
+            )
+        if verbose and not notes:
+            notes.append(
+                "expected: " + "; ".join(f"{h} ({p})" for h, p in sorted(expected))
+            )
+        print(
+            f"{page.id:20} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
+            file=sys.stderr,
+        )
+
+    # ---- micro/macro summary over pairs -----------------------------------
+    tp = sum(r[3] for r in rows)
+    fp = sum(r[4] for r in rows)
+    fn = sum(r[5] for r in rows)
     micro_p, micro_r, micro_f1 = prf(tp, fp, fn)
 
-    per_page = [prf(*s) for s in page_stats.values()]
+    per_page = [page_prf(exp, got) for _, exp, got, *_ in rows]
     n = len(per_page)
     macro_p = sum(p for p, _, _ in per_page) / n if n else 0.0
     macro_r = sum(r for _, r, _ in per_page) / n if n else 0.0
     macro_f1 = sum(f for _, _, f in per_page) / n if n else 0.0
 
-    print(f"\n{title}", file=sys.stderr)
-    print("          precision   recall     F1", file=sys.stderr)
-    print(f"micro     {micro_p:8.3f}  {micro_r:8.3f}  {micro_f1:8.3f}", file=sys.stderr)
-    print(f"macro     {macro_p:8.3f}  {macro_r:8.3f}  {macro_f1:8.3f}", file=sys.stderr)
-    print(f"          (TP={tp} FP={fp} FN={fn})", file=sys.stderr)
+    print(file=sys.stderr)
+    print(f"{len(rows)} fixture(s)", file=sys.stderr)
+    print("                     precision   recall     F1", file=sys.stderr)
+    print(
+        f"micro (pairs)      {micro_p:8.3f}  {micro_r:8.3f}  {micro_f1:8.3f}",
+        file=sys.stderr,
+    )
+    print(
+        f"macro (pairs)      {macro_p:8.3f}  {macro_r:8.3f}  {macro_f1:8.3f}",
+        file=sys.stderr,
+    )
+    print(f"                   (TP={tp} FP={fp} FN={fn})", file=sys.stderr)
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
 
 
 @click.command()
 @click.option(
-    "-g",
-    "--golden",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=DEFAULT_GOLDEN,
-    help="Golden sample CSV (page, human, position, ...).",
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Also print the expected pairs for clean fixtures.",
 )
 @click.option(
-    "-d",
-    "--dataset",
-    type=str,
-    default=DEFAULT_DATASET,
-    help="Kolkhoz dataset (PageRow.dataset) to score.",
+    "--fixtures",
+    "fixtures_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=str(FIXTURES_DIR),
+    show_default=True,
+    help="Directory of fixture JSON files.",
 )
-@click.option(
-    "-o",
-    "--out",
-    type=click.Path(dir_okay=False, path_type=Path),
-    default=DEFAULT_OUT,
-    help="Per-page eval CSV to write.",
-)
-def cli(golden: Path, dataset: str, out: Path) -> None:
-    golden_by_page = load_golden(golden)
-    extracted_by_page = load_extracted(dataset)
-    print(
-        f"golden: {len(golden_by_page)} page(s); "
-        f"extracted dataset {dataset!r}: {len(extracted_by_page)} page(s)",
-        file=sys.stderr,
-    )
-
-    pages = sorted(golden_by_page.keys() | extracted_by_page.keys())
-
-    pair_stats: dict[str, tuple[int, int, int]] = {}
-    count_stats: dict[str, tuple[int, int, int]] = {}
-    human_stats: dict[str, tuple[int, int, int]] = {}
-    position_stats: dict[str, tuple[int, int, int]] = {}
-    per_page: dict[str, dict] = {}
-
-    for page in pages:
-        g_pairs = golden_by_page.get(page, set())
-        e_pairs = extracted_by_page.get(page, set())
-
-        g_humans = {h for h, _ in g_pairs}
-        e_humans = {h for h, _ in e_pairs}
-        g_positions = {p for _, p in g_pairs}
-        e_positions = {p for _, p in e_pairs}
-
-        pair_stats[page] = set_confusion(g_pairs, e_pairs)
-        count_stats[page] = count_confusion(len(g_pairs), len(e_pairs))
-        human_stats[page] = set_confusion(g_humans, e_humans)
-        position_stats[page] = set_confusion(g_positions, e_positions)
-
-        per_page[page] = {
-            "golden": len(g_pairs),
-            "extracted": len(e_pairs),
-            "pair": prf(*pair_stats[page]),
-            "count": prf(*count_stats[page]),
-            "human": prf(*human_stats[page]),
-            "position": prf(*position_stats[page]),
-            "missed_pairs": sorted(g_pairs - e_pairs),
-            "extra_pairs": sorted(e_pairs - g_pairs),
-            "missed_humans": sorted(g_humans - e_humans),
-            "extra_humans": sorted(e_humans - g_humans),
-        }
-
-    print(f"\n{len(pages)} page(s) scored", file=sys.stderr)
-    report("pairs (human, position)", pair_stats)
-    report("count (number of holders)", count_stats)
-    report("human names", human_stats)
-    report("position names", position_stats)
-
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "page",
-                "golden",
-                "extracted",
-                "pair_p",
-                "pair_r",
-                "pair_f1",
-                "count_p",
-                "count_r",
-                "count_f1",
-                "human_p",
-                "human_r",
-                "human_f1",
-                "position_p",
-                "position_r",
-                "position_f1",
-                "missed_humans",
-                "extra_humans",
-                "missed_pairs",
-                "extra_pairs",
-            ]
-        )
-        for page in pages:
-            p = per_page[page]
-            writer.writerow(
-                [
-                    page,
-                    p["golden"],
-                    p["extracted"],
-                    f"{p['pair'][0]:.3f}",
-                    f"{p['pair'][1]:.3f}",
-                    f"{p['pair'][2]:.3f}",
-                    f"{p['count'][0]:.3f}",
-                    f"{p['count'][1]:.3f}",
-                    f"{p['count'][2]:.3f}",
-                    f"{p['human'][0]:.3f}",
-                    f"{p['human'][1]:.3f}",
-                    f"{p['human'][2]:.3f}",
-                    f"{p['position'][0]:.3f}",
-                    f"{p['position'][1]:.3f}",
-                    f"{p['position'][2]:.3f}",
-                    "; ".join(p["missed_humans"]),
-                    "; ".join(p["extra_humans"]),
-                    "; ".join(f"{h} ({pos})" for h, pos in p["missed_pairs"]),
-                    "; ".join(f"{h} ({pos})" for h, pos in p["extra_pairs"]),
-                ]
-            )
-    print(f"\nwrote per-page eval → {out}", file=sys.stderr)
+def cli(verbose: bool, fixtures_dir: Path) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
+    fixtures = load_fixtures(Path(fixtures_dir))
+    run(fixtures, verbose)
 
 
 if __name__ == "__main__":

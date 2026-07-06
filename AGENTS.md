@@ -10,19 +10,18 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 
 - **Python** 3.13+ managed by **uv**.
 - **SQLite** for structured results (extracted humans, positions, links to Pravda snapshots).
-- **[Followthemoney](https://followthemoney.tech)** as the export model: extracted holders are emitted as Organization / Position / Person / Occupancy / Document entities.
 - **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)) for web page capture and storage. The base URL is set in `PRAVDA_URL` (see `.env`). Kolkhoz hits Pravda's FastAPI and reads returned file paths directly from disk.
 
 ## Project structure
 
 ```
-kolkhoz.py         # the CLI: snapshot-csv, extract, export-ftm
+kolkhoz.py         # the CLI: snapshot-csv, extract, export-csv
 models.py          # SQLAlchemy domain (Page, Extraction, Holder)
-golden.py          # build the golden set (`build`) and sample it (`sample`) for eval
-evaluate.py        # score kolkhoz extractions against a golden sample
+evaluate.py        # score the extraction pipeline against synthetic fixtures
+fixtures/          # JSON synthetic pages (org, holders, distractor HTML) for evaluate.py
 ```
 
-`data/` (gitignored) holds generated files and the cached OpenSanctions export.
+`data/` (gitignored) holds generated files.
 
 ## Conventions
 
@@ -45,16 +44,18 @@ uv run python some_script.py
 
 ## Evaluation
 
+Score the extraction pipeline against hand-authored synthetic fixtures in
+`evaluate.py`. Each fixture is an authored page with a known set of holders;
+the harness renders it to HTML, derives the plaintext, runs the real
+`extract()`, and scores the returned (human, position) pairs by exact string
+equality.
+
 ```bash
-uv run python golden.py build                                 # build golden set (cached)
-uv run python golden.py sample                                # → data/golden_sample*
-uv run python kolkhoz.py snapshot-csv data/golden_sample_input.csv
-uv run python kolkhoz.py extract golden_sample_input
-uv run python evaluate.py
+uv run python evaluate.py   # run all fixtures
+uv run python evaluate.py -v # show expected pairs
 ```
 
-See each script's docstring for options. Scoring is exact string equality at
-the (human, position)-pair level.
+See `evaluate.py`'s docstring for the fixture set and options.
 
 ## Linting and formatting
 

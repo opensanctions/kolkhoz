@@ -1,0 +1,17 @@
+{
+  "organization": "United Federation of Trade Unions — National Board",
+  "holders": [
+    {"human": "Kwame Mensah", "position": "President"},
+    {"human": "Ingrid Lindqvist", "position": "Vice President"},
+    {"human": "Yusuf Demir", "position": "Secretary-General"},
+    {"human": "Mei-Lin Chen", "position": "Treasurer"},
+    {"human": "Carlos Mendoza", "position": "Director"},
+    {"human": "Ngozi Okonkwo", "position": "Director"},
+    {"human": "Pavel Novák", "position": "Director"},
+    {"human": "Amara Singh", "position": "Director"},
+    {"human": "João Silva", "position": "Regional Chair, North"},
+    {"human": "Astrid Berg", "position": "Regional Chair, South"},
+    {"human": "Rashid Karim", "position": "Regional Chair, East"},
+    {"human": "Bianca Rossi", "position": "Regional Chair, West"}
+  ]
+}

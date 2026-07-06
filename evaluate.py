@@ -18,14 +18,19 @@ data, not the chrome.
 
 Scope is deliberately narrow:
 
-- **Text path only.** ``extract()`` is a text-reading task; the screenshot is
-  only attached by ``screenshot_reason`` for thin-text or image-dense pages,
-  and a screenshot rendered from our own clean HTML would carry the identical
-  information as pixels — testing nothing the text doesn't. The genuinely hard
-  screenshot case (names baked into real images) can't be synthesized without
-  drawing text into images, so we don't pretend. The harness always calls
-  ``extract(text, None)``; the screenshot path is validated separately against
-  real captures.
+- **Two modes, one per fixture.** Each fixture is either ``text`` (the
+  default) or ``screenshot``. A ``text`` fixture renders to HTML, derives the
+  plaintext, and calls ``extract(text, None)`` — the text-only path. A
+  ``screenshot`` fixture additionally rasterizes that same HTML to a PNG with
+  PIL (a mini-renderer for the one template ``render_html`` emits, not a
+  general HTML engine) and calls ``extract(text, screenshot_blob)`` — the
+  screenshot path: image tiling, base64 encoding, and the model reading
+  holders from pixels. Because the screenshot is rendered from the same roster
+  the text comes from, a correct extraction still recovers every holder, so a
+  screenshot fixture is a clean pass/fail on the image plumbing rather than an
+  OCR-hardship test. The genuinely hard case (names baked into real
+  photographs, org charts, headshot rosters) stays out of reach — a future
+  fixture class.
 
 - **(human, position) pairs only**, scored per fixture by exact string
   equality. Richer fields (dob, bio, dates) can be added once fixtures carry
@@ -47,14 +52,17 @@ Usage:
     uv run python evaluate.py -v # per-fixture detail
 """
 
+import io
 import json
 import logging
 import sys
 from html import escape
 from pathlib import Path
+from typing import Literal
 
 import click
 from bs4 import BeautifulSoup
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 
 from kolkhoz import extract
@@ -84,13 +92,17 @@ class SyntheticPage(BaseModel):
     id field in the JSON itself. ``holders`` is the answer key — exactly the
     (human, position) pairs a correct extraction returns. ``extra_html`` is
     unstructured noise (footers, contact lines, history) sprinkled into the
-    rendered page to test precision against distractors.
+    rendered page to test precision against distractors. ``mode`` picks the
+    pipeline path: ``text`` (default) sends plaintext only; ``screenshot``
+    also rasterizes the rendered HTML to a PNG and attaches it, exercising
+    the image path of ``extract``.
     """
 
     id: str
     organization: str
     holders: list[SyntheticHolder] = Field(default_factory=list)
     extra_html: str = ""
+    mode: Literal["text", "screenshot"] = "text"
 
 
 # ===========================================================================
@@ -136,6 +148,105 @@ def html_to_text(html: str) -> str:
     """
     soup = BeautifulSoup(html, "html.parser")
     return " ".join(soup.get_text(separator=" ").split())
+
+
+def render_screenshot(html: str) -> bytes:
+    """Rasterize a page's HTML to a PNG the model reads as pixels.
+
+    A mini-renderer for the single template ``render_html`` emits — the
+    organization ``<h1>``, an optional Name/Position ``<table>``, then any
+    stray block text from ``extra_html`` — not a general HTML engine. Two
+    passes: measure to size the canvas, then draw, so the image is exactly as
+    tall as its content. Used only by ``mode="screenshot"`` fixtures to drive
+    the screenshot path of the pipeline (image tiling, encoding, the model
+    reading holders from pixels) without a headless browser.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    font = ImageFont.load_default(size=24)
+    head_font = ImageFont.load_default(size=32)
+    margin = 40
+    width = 1000
+    gap = 14
+
+    def textw(text: str, f: ImageFont.ImageFont) -> int:
+        return int(f.getlength(text))
+
+    def line_height(f: ImageFont.ImageFont) -> int:
+        return f.getbbox("Ag")[3] + gap
+
+    def wrap(text: str, f: ImageFont.ImageFont, max_w: int) -> list[str]:
+        words, out, cur = text.split(), [], ""
+        for w in words:
+            trial = w if not cur else cur + " " + w
+            if textw(trial, f) <= max_w:
+                cur = trial
+            elif cur:
+                out.append(cur)
+                cur = w
+            else:
+                out.append(w)
+                cur = ""
+        if cur:
+            out.append(cur)
+        return out or [""]
+
+    # Pull the pieces the known template emits out of the DOM.
+    head_el = soup.find("h1")
+    head = head_el.get_text(strip=True) if head_el else ""
+    rows: list[tuple[str, str]] = []
+    table = soup.find("table")
+    if table:
+        for tr in table.find_all("tr"):
+            cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+            if len(cells) == 2:
+                rows.append((cells[0], cells[1]))
+    distractors: list[str] = []
+    body = soup.body or soup
+    for child in body.children:
+        if getattr(child, "name", None) in (None, "h1", "table"):
+            continue
+        txt = child.get_text(separator=" ", strip=True)
+        if txt:
+            distractors.append(txt)
+
+    # Pass 1: lay out (text, x, font, y) ops against a running y cursor.
+    ops: list[tuple[str, int, ImageFont.ImageFont, int]] = []
+    y = margin
+    h_lh = line_height(head_font)
+    f_lh = line_height(font)
+    if head:
+        ops.append((head, margin, head_font, y))
+        y += h_lh + gap
+    if rows:
+        name_w = max(textw(name, font) for name, _ in rows)
+        pos_x = margin + name_w + 60
+        ops.append(("Name", margin, font, y))
+        ops.append(("Position", pos_x, font, y))
+        y += f_lh
+        for name, pos in rows:
+            ops.append((name, margin, font, y))
+            ops.append((pos, pos_x, font, y))
+            y += f_lh
+        y += gap
+    content_w = width - 2 * margin
+    for d in distractors:
+        for ln in wrap(d, font, content_w):
+            ops.append((ln, margin, font, y))
+            y += f_lh
+        y += gap
+
+    if ops:
+        last_text, _, last_font, last_y = ops[-1]
+        height = last_y + last_font.getbbox(last_text)[3] + margin
+    else:
+        height = margin * 2
+    img = Image.new("RGB", (width, max(height, 120)), "white")
+    draw = ImageDraw.Draw(img)
+    for text, x, f, ty in ops:  # pass 2: draw
+        draw.text((x, ty), text, fill="black", font=f)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 # ===========================================================================
@@ -200,8 +311,10 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
     """Render → extract → score each fixture, then print a summary table."""
     rows: list[tuple[SyntheticPage, set, set, int, int, int]] = []
     for page in fixtures:
-        text = html_to_text(render_html(page))
-        extraction = extract(text, None)
+        html = render_html(page)
+        text = html_to_text(html)
+        screenshot_blob = render_screenshot(html) if page.mode == "screenshot" else None
+        extraction = extract(text, screenshot_blob)
 
         expected = {(h.human, h.position) for h in page.holders}
         got = {(h.human, h.position) for h in extraction.holders}
@@ -212,8 +325,11 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
 
     # ---- per-fixture table ------------------------------------------------
     print(file=sys.stderr)
-    print(f"{'fixture':20} {'TP':>3} {'FP':>3} {'FN':>3}  notes", file=sys.stderr)
-    print("-" * 78, file=sys.stderr)
+    print(
+        f"{'fixture':20} {'mode':10} {'TP':>3} {'FP':>3} {'FN':>3}  notes",
+        file=sys.stderr,
+    )
+    print("-" * 90, file=sys.stderr)
     for page, expected, got, tp, fp, fn in rows:
         notes: list[str] = []
         if fp:
@@ -229,7 +345,7 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
                 "expected: " + "; ".join(f"{h} ({p})" for h, p in sorted(expected))
             )
         print(
-            f"{page.id:20} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
+            f"{page.id:20} {page.mode:10} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
             file=sys.stderr,
         )
 

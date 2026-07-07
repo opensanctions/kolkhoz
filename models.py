@@ -10,24 +10,17 @@ Three tables:
                 (organization, dataset) and is the unit
                 re-extraction is driven from.
 - ``Extraction`` one per (Page, snapshot). Records which Pravda snapshot we
-                read, which model extracted from it, when, and the resulting
-                ``page_type``. Re-running extraction on a new snapshot makes
-                a new row; Pravda tells us when content changed.
+                read, which model extracted from it, and when. Re-running
+                extraction on a new snapshot makes a new row; Pravda tells
+                us when content changed.
 - ``Holder``    a named (human, position) pair found in one Extraction.
                 Many per Extraction.
 """
 
-import enum
 from datetime import datetime
 
 from sqlalchemy import ForeignKey, JSON, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-
-class PageType(str, enum.Enum):
-    roster = "roster"  # page that lists named position holders (board, council, staff, directory)
-    profile = "profile"  # a single person's bio / CV / appointment page
-    other = "other"  # about/contact/landing/article — not expected to list holders
 
 
 class Base(DeclarativeBase):
@@ -63,7 +56,6 @@ class Extraction(Base):
     snapshot_retrieved_at: Mapped[str]
     model: Mapped[str]
     extracted_at: Mapped[datetime]
-    page_type: Mapped[PageType]
 
     page: Mapped[Page] = relationship(back_populates="extractions")
     holders: Mapped[list["Holder"]] = relationship(

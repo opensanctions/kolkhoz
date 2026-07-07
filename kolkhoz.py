@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
-from models import Base, PageType
+from models import Base
 from models import Extraction as ExtractionRow
 from models import Holder as HolderRow
 from models import Page as PageRow
@@ -215,15 +215,6 @@ class Holder(BaseModel):
 
 
 class Extraction(BaseModel):
-    page_type: PageType = Field(
-        description=(
-            "The kind of page this is. "
-            "`roster` lists multiple named position holders. "
-            "`profile` is a single person's page about themselves. "
-            "`other` is for generic pages (about, contact, article, landing) "
-            "that are not in the business of listing position holders."
-        )
-    )
     holders: list[Holder] = Field(
         description="Position holders found on the page. Empty if none."
     )
@@ -251,9 +242,8 @@ def extract(text: str, screenshot_blob: bytes | None) -> Extraction:
         reasoning={"effort": REASONING_EFFORT},
     )
     log.info(
-        "  → final: %d holder(s), page_type=%s",
+        "  → final: %d holder(s)",
         len(response.output_parsed.holders),
-        response.output_parsed.page_type.value,
     )
     return response.output_parsed
 
@@ -460,7 +450,6 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
 
     n = 0
     hits = 0
-    pt_counts: dict[str, int] = {}
     with Session() as session, httpx.Client(timeout=30) as client:
         for page in pages:
             snapshot = latest_snapshot(client, page.url)
@@ -509,9 +498,6 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
             n += 1
             if holders:
                 hits += 1
-            pt_counts[extraction.page_type.value] = (
-                pt_counts.get(extraction.page_type.value, 0) + 1
-            )
 
             # Re-attach the page to this session (it was loaded above in a
             # different, now-closed session).
@@ -523,7 +509,6 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                 snapshot_retrieved_at=snapshot["captured_at"],
                 model=os.environ["OPENAI_MODEL"],
                 extracted_at=datetime.now(),
-                page_type=extraction.page_type,
             )
             for h in holders:
                 extraction_row.holders.append(
@@ -546,12 +531,6 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
 
     log.info("wrote %d record(s) → %s", n, os.environ["KOLKHOZ_DB"])
     log.info("extraction: %d hit, %d miss", hits, n - hits)
-    log.info(
-        "page_type: roster=%d profile=%d other=%d",
-        pt_counts.get("roster", 0),
-        pt_counts.get("profile", 0),
-        pt_counts.get("other", 0),
-    )
 
 
 @cli.command(

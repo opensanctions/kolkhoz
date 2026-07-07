@@ -31,8 +31,7 @@ Scope is deliberately narrow:
 
 - **(human, position) pairs only**, scored per fixture by exact string
   equality. Richer fields (dob, bio, dates) can be added once fixtures carry
-  them. ``page_type`` is part of kolkhoz's extraction output but is not scored
-  or reported here.
+  them.
 
 - **Hand-authored fixtures.** Each is a deliberate, legible case that probes
   one behavior: clean recall, distractor precision, verbatim preservation of

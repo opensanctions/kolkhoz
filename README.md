@@ -47,5 +47,3 @@ Score the extraction pipeline against hand-authored synthetic fixtures in `evalu
 uv run python evaluate.py   # run all fixtures
 uv run python evaluate.py -v # show expected pairs
 ```
-
-`data/` is gitignored.

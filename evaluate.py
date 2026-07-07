@@ -10,25 +10,24 @@ harness renders it to HTML, derives the plaintext the model reads, runs the
 real ``kolkhoz.extract``, and scores the returned (human, position) pairs
 against what we put in. Exact-match is honest again.
 
-Fixtures live as JSON in ``fixtures/`` (one file per page: an organization, a
-list of holders, and optional distractor HTML). The filename stem is the
+Fixtures live as JSON in ``fixtures/`` (one file per page: an organization, two lists of holders (text and
+screenshot), and optional distractor HTML). The filename stem is the
 fixture id. Every fixture renders through the same single layout — a roster
 table of its holders — so the only thing that varies between cases is the
 data, not the chrome.
 
 Scope is deliberately narrow:
 
-- **Two modes, one per fixture.** Each fixture is ``text`` (the default) or
-  ``image``. A ``text`` fixture renders to HTML, derives the plaintext, and
-  calls ``extract(text, None)`` — the text-only path. An ``image`` fixture
-  passes only thin text (the organization name — no holder names) plus a
-  rasterized roster PNG (a mini-renderer for the one roster layout, not a
-  general HTML engine), so the model must read every holder from the image.
-  There is no "text and screenshot both present" mode: in production the
-  screenshot is attached *only* when the text is insufficient
-  (``kolkhoz.screenshot_reason`` fires on thin or image-dense text), so that
-  combination never occurs and is not worth testing. The ``image`` fixture is
-  the faithful mirror of that trigger — thin text in, holders out of pixels.
+- **Two holder lists per fixture, no mode switch.** Each fixture declares
+  ``text_holders`` (rendered to the plaintext the model reads) and
+  ``screenshot_holders`` (rasterized to a roster PNG, attached iff non-empty).
+  The answer key is the union of both. The three pipeline paths fall out of
+  how the two are populated: text-only; screenshot-only (thin text, the
+  "thin text" trigger); or both with ``text_holders`` a subset of
+  ``screenshot_holders`` (text/screenshot overlap — the "image-dense"
+  trigger, where the model must neither double-count the shared names nor
+  miss the pixel-only ones). Both screenshot triggers mirror real branches
+  of ``kolkhoz.screenshot_reason``.
 
 - **(human, position) pairs only**, scored per fixture by exact string
   equality. Richer fields (dob, bio, dates) can be added once fixtures carry
@@ -56,7 +55,6 @@ import logging
 import sys
 from html import escape
 from pathlib import Path
-from typing import Literal
 
 import click
 from bs4 import BeautifulSoup
@@ -89,26 +87,22 @@ class SyntheticHolder(BaseModel):
 
 
 class SyntheticPage(BaseModel):
-    """One authored page: the org it is about, the holders it names, and any
+    """One authored page: the org, the holders named in each channel, and any
     distractor HTML that must *not* be extracted.
 
-    ``id`` is the JSON filename stem; the file *is* the fixture, so there is no
-    id field in the JSON itself. ``holders`` is the answer key — exactly the
-    (human, position) pairs a correct extraction returns. ``extra_html`` is
-    unstructured noise (footers, contact lines, history) sprinkled into the
-    rendered page to test precision against distractors. ``mode`` picks the
-    pipeline path: ``text`` (default) sends the rendered plaintext only;
-    ``image`` sends only thin text (the organization name) plus a rasterized
-    roster PNG, so every holder must be read from pixels — the production
-    "thin text" case, and the only situation in which the screenshot path
-    runs.
+    ``id`` is the JSON filename stem (the file *is* the fixture).
+    ``text_holders`` is rendered to HTML → the plaintext the model reads;
+    ``screenshot_holders`` is rasterized to a PNG, attached iff non-empty. The
+    answer key is the union of both — everyone the page states in either
+    channel. ``extra_html`` is distractor noise. No mode switch: the pipeline
+    path falls out of whether ``screenshot_holders`` is empty.
     """
 
     id: str
     organization: str
-    holders: list[SyntheticHolder] = Field(default_factory=list)
+    text_holders: list[SyntheticHolder] = Field(default_factory=list)
+    screenshot_holders: list[SyntheticHolder] = Field(default_factory=list)
     extra_html: str = ""
-    mode: Literal["text", "image"] = "text"
 
 
 # ===========================================================================
@@ -117,12 +111,9 @@ class SyntheticPage(BaseModel):
 
 
 def render_html(page: SyntheticPage) -> str:
-    """Render a page to standalone HTML through a single roster layout.
-
-    Holders become a Name/Position table; a holder-free page renders no table
-    (just the organization header and any distractor HTML). The model reads
-    the derived plaintext, so what varies the reading task between fixtures is
-    the data, not the markup.
+    """Render ``text_holders`` to standalone HTML through one roster layout
+    (a Name/Position table, or just the header when empty). The model reads
+    the derived plaintext, so only the data varies between fixtures.
     """
     parts = [
         "<!DOCTYPE html>",
@@ -130,11 +121,11 @@ def render_html(page: SyntheticPage) -> str:
         f"<title>{escape(page.organization)}</title></head><body>",
         f"<h1>{escape(page.organization)}</h1>",
     ]
-    if page.holders:
+    if page.text_holders:
         parts.append(
             "<table><thead><tr><th>Name</th><th>Position</th></tr></thead><tbody>"
         )
-        for h in page.holders:
+        for h in page.text_holders:
             parts.append(
                 f"<tr><td>{escape(h.human)}</td><td>{escape(h.position)}</td></tr>"
             )
@@ -157,17 +148,13 @@ def html_to_text(html: str) -> str:
 
 
 def render_screenshot(page: SyntheticPage) -> bytes:
-    """Rasterize a page's roster to a PNG the model reads as pixels.
+    """Rasterize ``screenshot_holders`` to a roster PNG.
 
-    A mini-renderer for the single roster layout — the organization name as a
-    heading, an optional Name/Position table of the holders, then any stray
-    block text from ``extra_html`` — not a general HTML engine. Two passes:
-    measure to size the canvas, then draw, so the image is exactly as tall as
-    its content. Page-driven (not HTML-driven) so the screenshot can carry the
-    holders even when the page text is told they are absent
-    (``mode="image"``). Used by ``image`` fixtures to drive the image path of
-    the pipeline (tiling, encoding, reading holders from pixels) without a
-    headless browser.
+    A mini-renderer for the one roster layout — not a general HTML engine. Two
+    passes: measure to size the canvas, then draw. Page-driven (not
+    HTML-driven) so the screenshot can show the full roster regardless of what
+    ``text_holders`` the text channel carries. Drives the image path of the
+    pipeline without a headless browser.
     """
     font = ImageFont.truetype(str(FONT_PATH), 24)
     head_font = ImageFont.truetype(str(FONT_PATH), 32)
@@ -197,10 +184,10 @@ def render_screenshot(page: SyntheticPage) -> bytes:
             out.append(cur)
         return out or [""]
 
-    # Pull the roster straight off the page (not its HTML) so the screenshot
-    # can carry the holders even when the text path is told they are absent.
+    # Drawn from screenshot_holders (not the rendered HTML), so the screenshot
+    # can carry the full roster regardless of text_holders.
     head = page.organization
-    rows = [(h.human, h.position) for h in page.holders]
+    rows = [(h.human, h.position) for h in page.screenshot_holders]
     distractors: list[str] = []
     if page.extra_html:
         extra = BeautifulSoup(page.extra_html, "html.parser")
@@ -307,23 +294,30 @@ def load_fixtures(fixtures_dir: Path) -> list[SyntheticPage]:
 # ===========================================================================
 
 
+def _shape(page: SyntheticPage) -> str:
+    """Table label for which pipeline path a fixture drives, derived from the
+    two holder lists (not stored): text / image / partial."""
+    if not page.screenshot_holders:
+        return "text"
+    if not page.text_holders:
+        return "image"
+    return "partial"
+
+
 def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
     """Render → extract → score each fixture, then print a summary table."""
     rows: list[tuple[SyntheticPage, set, set, int, int, int]] = []
     for page in fixtures:
-        if page.mode == "image":
-            # Names live only in the screenshot; the page text is just the
-            # organization name — the "thin text" case that fires the
-            # screenshot path in production. The model must read holders
-            # from pixels.
-            text = page.organization
-            screenshot_blob = render_screenshot(page)
-        else:
-            text = html_to_text(render_html(page))
-            screenshot_blob = None
+        # Text always carries text_holders (empty = thin text); the screenshot
+        # is attached iff screenshot_holders is non-empty. The two lists cover
+        # every path with no mode switch.
+        text = html_to_text(render_html(page))
+        screenshot_blob = render_screenshot(page) if page.screenshot_holders else None
         extraction = extract(text, screenshot_blob)
 
-        expected = {(h.human, h.position) for h in page.holders}
+        expected = {(h.human, h.position) for h in page.text_holders} | {
+            (h.human, h.position) for h in page.screenshot_holders
+        }
         got = {(h.human, h.position) for h in extraction.holders}
         tp, fp, fn = score_page(expected, got)
         rows.append((page, expected, got, tp, fp, fn))
@@ -333,7 +327,7 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
     # ---- per-fixture table ------------------------------------------------
     print(file=sys.stderr)
     print(
-        f"{'fixture':20} {'mode':10} {'TP':>3} {'FP':>3} {'FN':>3}  notes",
+        f"{'fixture':20} {'path':10} {'TP':>3} {'FP':>3} {'FN':>3}  notes",
         file=sys.stderr,
     )
     print("-" * 90, file=sys.stderr)
@@ -352,7 +346,7 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
                 "expected: " + "; ".join(f"{h} ({p})" for h, p in sorted(expected))
             )
         print(
-            f"{page.id:20} {page.mode:10} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
+            f"{page.id:20} {_shape(page):10} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
             file=sys.stderr,
         )
 

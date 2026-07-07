@@ -1,6 +1,6 @@
 {
   "organization": "Riverside City Council",
-  "holders": [
+  "text_holders": [
     {"human": "Lucia Fernández", "position": "Mayor"},
     {"human": "David Kim", "position": "Deputy Mayor"},
     {"human": "Fatima Al-Sayed", "position": "Councillor"}

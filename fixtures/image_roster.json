@@ -1,7 +1,6 @@
 {
   "organization": "Northwind Energy Corp",
-  "mode": "image",
-  "holders": [
+  "screenshot_holders": [
     {"human": "Marek Dvořák", "position": "Chair of the Board"},
     {"human": "Aisha Rahman", "position": "Chief Executive Officer"},
     {"human": "Hiroshi Tanaka", "position": "Chief Financial Officer"},

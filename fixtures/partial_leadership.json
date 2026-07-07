@@ -1,0 +1,15 @@
+{
+  "organization": "Meridian Health Foundation",
+  "text_holders": [
+    {"human": "Ingrid Sandberg", "position": "Chair of the Board"},
+    {"human": "Dmitri Volkov", "position": "Chief Executive Officer"}
+  ],
+  "screenshot_holders": [
+    {"human": "Ingrid Sandberg", "position": "Chair of the Board"},
+    {"human": "Dmitri Volkov", "position": "Chief Executive Officer"},
+    {"human": "Adaeze Okoro", "position": "Chief Medical Officer"},
+    {"human": "Tomás Ribeiro", "position": "Chief Financial Officer"},
+    {"human": "Yuki Nakamura", "position": "Chief Operating Officer"},
+    {"human": "Françoise Lévêque", "position": "General Counsel"}
+  ]
+}

@@ -21,7 +21,9 @@ evaluate.py        # score the extraction pipeline against synthetic fixtures
 fixtures/          # JSON synthetic pages (org, holders, distractor HTML) for evaluate.py
 ```
 
-`data/` (gitignored) holds generated files.
+`input/` (gitignored) holds the input CSVs (one dataset per file). `output/`
+(gitignored) holds generated exports. Both are fsspec paths set via
+`INPUT_BASE_PATH` / `OUTPUT_BASE_PATH` in `.env`.
 
 ## Conventions
 

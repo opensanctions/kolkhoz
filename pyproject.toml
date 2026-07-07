@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "beautifulsoup4>=4.15.0",
     "click>=8.4.1",
+    "fsspec[gcs]>=2026.6.0",
     "httpx>=0.28.1",
     "openai>=2.41.1",
     "pillow>=12.2.0",

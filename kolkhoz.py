@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import click
+import fsspec
 import httpx
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -300,18 +301,34 @@ class InputRow(BaseModel):
     url: str
 
 
-def load_input(path: str) -> list[InputRow]:
-    """Parse the input CSV into typed rows, dropping rows with a blank URL."""
-    with open(path) as f:
-        reader = csv.DictReader(f)
-        return [
-            InputRow(
-                organization=row["organization"].strip(),
-                url=row["url"].strip(),
-            )
-            for row in reader
-            if row["url"].strip()
-        ]
+def dataset_name(path: str) -> str:
+    """Dataset name derived from the input CSV's filename stem."""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def load_inputs(base_path: str) -> list[tuple[str, list[InputRow]]]:
+    """Load every CSV under the input directory as a (dataset, rows) pair.
+
+    *base_path* is an fsspec URL (local dir or ``gs://``/``s3://`` prefix).
+    Each CSV becomes its own dataset, named after the file's stem; rows with
+    a blank URL are dropped. Files are read straight from the bucket without
+    a local copy.
+    """
+    fs, base = fsspec.core.url_to_fs(base_path)
+    result: list[tuple[str, list[InputRow]]] = []
+    for path in sorted(fs.glob(os.path.join(base, "*.csv"))):
+        with fs.open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = [
+                InputRow(
+                    organization=row["organization"].strip(),
+                    url=row["url"].strip(),
+                )
+                for row in reader
+                if row["url"].strip()
+            ]
+        result.append((dataset_name(path), rows))
+    return result
 
 
 async def run_snapshot_csv(
@@ -366,7 +383,8 @@ EXPORT_FIELDS = [
     "evidence_quotes",
 ]
 
-# Export files are named <date>.<dataset>.jsonl, dated with the export run.
+# Export files are written to <output-base>/<dataset>/<date>.jsonl, where
+# <date> is the export run date.
 EXPORT_DATE_FORMAT = "%Y-%m-%d"
 
 
@@ -407,8 +425,10 @@ def cli() -> None:
     root.addHandler(logging.StreamHandler())
 
 
-@cli.command("snapshot-csv", help="Snapshot all URLs from a CSV through Pravda.")
-@click.argument("csv_path", type=click.Path(exists=True))
+@cli.command(
+    "snapshot-csv",
+    help="Snapshot all URLs from the CSVs in the input directory through Pravda.",
+)
 @click.option(
     "-c",
     "--concurrency",
@@ -416,10 +436,13 @@ def cli() -> None:
     default=5,
     help="Max concurrent requests to Pravda.",
 )
-def snapshot_csv_cmd(csv_path: str, concurrency: int) -> None:
+def snapshot_csv_cmd(concurrency: int) -> None:
     Path(os.environ["KOLKHOZ_DB"]).parent.mkdir(parents=True, exist_ok=True)
-    dataset = Path(csv_path).stem
-    asyncio.run(run_snapshot_csv(load_input(csv_path), dataset, concurrency))
+    inputs = load_inputs(os.environ["INPUT_BASE_PATH"])
+    log.info("%d input CSV(s)", len(inputs))
+    for dataset, rows in inputs:
+        log.info("dataset %s: %d row(s)", dataset, len(rows))
+        asyncio.run(run_snapshot_csv(rows, dataset, concurrency))
 
 
 @cli.command(
@@ -537,18 +560,11 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
     "export",
     help=(
         "Export extracted holders as JSONL (one record per person-position "
-        "observation). Writes one date-prefixed .jsonl file per dataset to "
-        "the output directory."
+        "observation). Writes one .jsonl file per dataset to "
+        "<output-base>/<dataset>/<date>.jsonl."
     ),
 )
-@click.option(
-    "-o",
-    "--output",
-    type=click.Path(file_okay=False, dir_okay=True, writable=True),
-    required=True,
-    help="Output directory (one .jsonl file per dataset).",
-)
-def export_cmd(output: str) -> None:
+def export_cmd() -> None:
     with Session() as session:
         # Only the most recent extraction per page, so re-running extraction
         # doesn't multiply the output.
@@ -570,18 +586,20 @@ def export_cmd(output: str) -> None:
         for holder, extraction, page in session.execute(stmt).all():
             groups.setdefault(page.dataset, []).append((page, extraction, holder))
 
-    out_dir = Path(output)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    fs, base = fsspec.core.url_to_fs(os.environ["OUTPUT_BASE_PATH"])
     date = datetime.now().strftime(EXPORT_DATE_FORMAT)
     total = 0
     for group, group_rows in groups.items():
-        path = out_dir / f"{date}.{group}.jsonl"
-        with open(path, "w", encoding="utf-8") as fh:
+        out_dir = os.path.join(base, group)
+        out_file = os.path.join(out_dir, f"{date}.jsonl")
+        fs.makedirs(out_dir, exist_ok=True)
+        with fs.open(out_file, "wb") as fh:
             for page, extraction, holder in group_rows:
                 record = holder_to_record(page, extraction, holder)
-                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                fh.write(json.dumps(record, ensure_ascii=False).encode("utf-8"))
+                fh.write(b"\n")
         total += len(group_rows)
-        log.info("wrote %d record(s) → %s", len(group_rows), path)
+        log.info("wrote %d record(s) → %s", len(group_rows), out_file)
     log.info("exported %d record(s) across %d dataset(s)", total, len(groups))
 
 

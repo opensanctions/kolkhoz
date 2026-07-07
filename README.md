@@ -35,9 +35,8 @@ uv run python kolkhoz.py extract
 uv run python kolkhoz.py extract -d hio_leadership   # one dataset only
 uv run python kolkhoz.py extract -n 20               # random sample of 20
 
-# Export extracted holders as JSONL (stdout if no -o directory is given)
+# Export extracted holders as JSONL (one date-prefixed file per dataset)
 uv run python kolkhoz.py export -o data/exports
-uv run python kolkhoz.py export -d hio_leadership -o data/exports
 ```
 
 ## Evaluation

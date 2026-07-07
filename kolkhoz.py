@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import random
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -377,36 +376,8 @@ EXPORT_FIELDS = [
     "evidence_quotes",
 ]
 
-
-def build_export_rows(
-    session, dataset: str | None = None
-) -> list[tuple[PageRow, ExtractionRow, HolderRow]]:
-    """Collect the latest-extraction holders as export rows.
-
-    Only the most recent extraction per page is exported, so re-running
-    extraction doesn't multiply the output. Returns (page, extraction,
-    holder) triples in no particular order.
-    """
-    latest = (
-        select(
-            ExtractionRow.page_id.label("page_id"),
-            func.max(ExtractionRow.id).label("extraction_id"),
-        )
-        .group_by(ExtractionRow.page_id)
-        .subquery()
-    )
-    stmt = (
-        select(HolderRow, ExtractionRow, PageRow)
-        .join(latest, HolderRow.extraction_id == latest.c.extraction_id)
-        .join(ExtractionRow, HolderRow.extraction_id == ExtractionRow.id)
-        .join(PageRow, ExtractionRow.page_id == PageRow.id)
-    )
-    if dataset is not None:
-        stmt = stmt.where(PageRow.dataset == dataset)
-    return [
-        (page, extraction, holder)
-        for holder, extraction, page in session.execute(stmt).all()
-    ]
+# Export files are named <date>.<dataset>.jsonl, dated with the export run.
+EXPORT_DATE_FORMAT = "%Y-%m-%d"
 
 
 def holder_to_record(
@@ -436,14 +407,6 @@ def holder_to_record(
         "evidence_quotes": holder.evidence_quotes,
     }
     return {name: record[name] for name in EXPORT_FIELDS}
-
-
-def write_jsonl(fh, rows: list[tuple[PageRow, ExtractionRow, HolderRow]]) -> None:
-    """Write (page, extraction, holder) triples to *fh* as one JSON line each."""
-    for page, extraction, holder in rows:
-        record = holder_to_record(page, extraction, holder)
-        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-    fh.flush()
 
 
 @click.group()
@@ -595,41 +558,49 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
     "export",
     help=(
         "Export extracted holders as JSONL (one record per person-position "
-        "observation). Writes one .jsonl file per dataset to the output "
-        "directory, or to stdout if no directory is given (single combined "
-        "stream)."
+        "observation). Writes one date-prefixed .jsonl file per dataset to "
+        "the output directory."
     ),
-)
-@click.option(
-    "-d", "--dataset", type=str, default=None, help="Only export this dataset."
 )
 @click.option(
     "-o",
     "--output",
     type=click.Path(file_okay=False, dir_okay=True, writable=True),
-    default=None,
-    help="Output directory (one .jsonl file per dataset). Default: stdout.",
+    required=True,
+    help="Output directory (one .jsonl file per dataset).",
 )
-def export_cmd(dataset: str | None, output: str | None) -> None:
+def export_cmd(output: str) -> None:
     with Session() as session:
-        rows = build_export_rows(session, dataset)
-
-    groups: dict[str, list[tuple[PageRow, ExtractionRow, HolderRow]]] = {}
-    for page, extraction, holder in rows:
-        groups.setdefault(page.dataset, []).append((page, extraction, holder))
-
-    if output is None:
-        write_jsonl(sys.stdout, rows)
-        log.info("exported %d record(s)", len(rows))
-        return
+        # Only the most recent extraction per page, so re-running extraction
+        # doesn't multiply the output.
+        latest = (
+            select(
+                ExtractionRow.page_id.label("page_id"),
+                func.max(ExtractionRow.id).label("extraction_id"),
+            )
+            .group_by(ExtractionRow.page_id)
+            .subquery()
+        )
+        stmt = (
+            select(HolderRow, ExtractionRow, PageRow)
+            .join(latest, HolderRow.extraction_id == latest.c.extraction_id)
+            .join(ExtractionRow, HolderRow.extraction_id == ExtractionRow.id)
+            .join(PageRow, ExtractionRow.page_id == PageRow.id)
+        )
+        groups: dict[str, list[tuple[PageRow, ExtractionRow, HolderRow]]] = {}
+        for holder, extraction, page in session.execute(stmt).all():
+            groups.setdefault(page.dataset, []).append((page, extraction, holder))
 
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
+    date = datetime.now().strftime(EXPORT_DATE_FORMAT)
     total = 0
     for group, group_rows in groups.items():
-        path = out_dir / f"{group}.jsonl"
+        path = out_dir / f"{date}.{group}.jsonl"
         with open(path, "w", encoding="utf-8") as fh:
-            write_jsonl(fh, group_rows)
+            for page, extraction, holder in group_rows:
+                record = holder_to_record(page, extraction, holder)
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         total += len(group_rows)
         log.info("wrote %d record(s) → %s", len(group_rows), path)
     log.info("exported %d record(s) across %d dataset(s)", total, len(groups))

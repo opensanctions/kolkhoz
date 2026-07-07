@@ -58,8 +58,9 @@ class Extraction(Base):
     )
     # Pravda snapshot this extraction read from. The evidence.
     snapshot_id: Mapped[str]
-    # When Pravda captured the snapshot we extracted from (snapshot.captured_at).
-    snapshot_retrieved_at: Mapped[datetime]
+    # When Pravda captured the snapshot we extracted from, stored verbatim
+    # as the raw snapshot.captured_at string — no parsing or normalization.
+    snapshot_retrieved_at: Mapped[str]
     model: Mapped[str]
     extracted_at: Mapped[datetime]
     page_type: Mapped[PageType]

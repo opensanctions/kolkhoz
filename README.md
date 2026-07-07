@@ -11,7 +11,7 @@ Early R&D. Currently exploring what a viable automated extraction pipeline looks
 1. Sends URLs to Pravda for snapshotting (plaintext + rendered HTML + screenshot)
 2. Feeds snapshots to an LLM to extract structured "human / position" pairs
 3. Stores results in SQLite, linked to Pravda snapshot identifiers
-4. Exports the extracted holders as a flat CSV (one row per person/position observation), shaped for ingest by zavod
+4. Exports the extracted holders as JSONL (one record per person/position observation), shaped for ingest by zavod
 
 ## Setup
 
@@ -35,9 +35,9 @@ uv run python kolkhoz.py extract
 uv run python kolkhoz.py extract -d hio_leadership   # one dataset only
 uv run python kolkhoz.py extract -n 20               # random sample of 20
 
-# Export extracted holders as a flat CSV (stdout if no -o directory is given)
-uv run python kolkhoz.py export-csv -o data/exports
-uv run python kolkhoz.py export-csv -d hio_leadership -o data/exports
+# Export extracted holders as JSONL (stdout if no -o directory is given)
+uv run python kolkhoz.py export -o data/exports
+uv run python kolkhoz.py export -d hio_leadership -o data/exports
 ```
 
 ## Evaluation

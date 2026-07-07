@@ -15,7 +15,7 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 ## Project structure
 
 ```
-kolkhoz.py         # the CLI: snapshot-csv, extract, export-csv
+kolkhoz.py         # the CLI: snapshot-csv, extract, export
 models.py          # SQLAlchemy domain (Page, Extraction, Holder)
 evaluate.py        # score the extraction pipeline against synthetic fixtures
 fixtures/          # JSON synthetic pages (org, holders, distractor HTML) for evaluate.py

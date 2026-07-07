@@ -2,6 +2,7 @@ import asyncio
 import base64
 import csv
 import io
+import json
 import logging
 import os
 import random
@@ -352,10 +353,13 @@ async def run_snapshot_csv(
     log.info("wrote %d page(s) → %s", len(rows), os.environ["KOLKHOZ_DB"])
 
 
-# The wide CSV format handed to zavod. One row per (person, position)
-# observation extracted from one snapshot. Fixed column order, UTF-8,
-# source wording preserved (no FtM normalization — that is zavod's job).
-EXPORT_COLUMNS = [
+# The flat JSONL schema handed to zavod. One record per (person, position)
+# observation extracted from one snapshot. Fixed key order, UTF-8, source
+# wording preserved (no FtM normalization — that is zavod's job). Every
+# field is a scalar — no nested objects — except ``evidence_quotes``, which
+# stays a native list[str]; a list of supporting quotes is the reason we
+# left CSV behind.
+EXPORT_FIELDS = [
     "dataset",
     "source_url",
     "snapshot_id",
@@ -405,18 +409,20 @@ def build_export_rows(
     ]
 
 
-def holder_to_row(
+def holder_to_record(
     page: PageRow, extraction: ExtractionRow, holder: HolderRow
-) -> dict[str, str | None]:
-    """Flatten one holder observation into a CSV row dict.
+) -> dict:
+    """Flatten one holder observation into a JSONL record.
 
-    ``evidence_quotes`` (a list) is joined with newlines.
+    The schema is flat — every field is a scalar — except
+    ``evidence_quotes``, which stays a native list[str]. All dates are
+    plain source strings, copied verbatim with no parsing or reformatting.
     """
-    return {
+    record = {
         "dataset": page.dataset,
         "source_url": page.url,
         "snapshot_id": extraction.snapshot_id,
-        "snapshot_retrieved_at": extraction.snapshot_retrieved_at.isoformat(),
+        "snapshot_retrieved_at": extraction.snapshot_retrieved_at,
         "organisation_name": page.organization,
         "person_name": holder.human,
         "person_dob": holder.person_dob,
@@ -427,8 +433,17 @@ def holder_to_row(
         "position_jurisdiction": holder.position_jurisdiction,
         "position_start_date": holder.position_start_date,
         "position_end_date": holder.position_end_date,
-        "evidence_quotes": "\n".join(holder.evidence_quotes),
+        "evidence_quotes": holder.evidence_quotes,
     }
+    return {name: record[name] for name in EXPORT_FIELDS}
+
+
+def write_jsonl(fh, rows: list[tuple[PageRow, ExtractionRow, HolderRow]]) -> None:
+    """Write (page, extraction, holder) triples to *fh* as one JSON line each."""
+    for page, extraction, holder in rows:
+        record = holder_to_record(page, extraction, holder)
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    fh.flush()
 
 
 @click.group()
@@ -542,9 +557,7 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
             extraction_row = ExtractionRow(
                 page_id=page.id,
                 snapshot_id=snapshot["id"],
-                snapshot_retrieved_at=datetime.fromisoformat(
-                    snapshot["captured_at"].replace("Z", "+00:00")
-                ),
+                snapshot_retrieved_at=snapshot["captured_at"],
                 model=os.environ["OPENAI_MODEL"],
                 extracted_at=datetime.now(),
                 page_type=extraction.page_type,
@@ -579,11 +592,12 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
 
 
 @cli.command(
-    "export-csv",
+    "export",
     help=(
-        "Export extracted holders to the wide CSV format consumed by zavod. "
-        "Writes one CSV per dataset to the output directory, "
-        "or to stdout if no directory is given (single combined stream)."
+        "Export extracted holders as JSONL (one record per person-position "
+        "observation). Writes one .jsonl file per dataset to the output "
+        "directory, or to stdout if no directory is given (single combined "
+        "stream)."
     ),
 )
 @click.option(
@@ -594,9 +608,9 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
     "--output",
     type=click.Path(file_okay=False, dir_okay=True, writable=True),
     default=None,
-    help="Output directory (one CSV per dataset). Default: stdout.",
+    help="Output directory (one .jsonl file per dataset). Default: stdout.",
 )
-def export_csv_cmd(dataset: str | None, output: str | None) -> None:
+def export_cmd(dataset: str | None, output: str | None) -> None:
     with Session() as session:
         rows = build_export_rows(session, dataset)
 
@@ -604,41 +618,21 @@ def export_csv_cmd(dataset: str | None, output: str | None) -> None:
     for page, extraction, holder in rows:
         groups.setdefault(page.dataset, []).append((page, extraction, holder))
 
-    def write_stream(fh) -> None:
-        writer = csv.DictWriter(
-            fh,
-            fieldnames=EXPORT_COLUMNS,
-            extrasaction="ignore",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        for page, extraction, holder in rows:
-            writer.writerow(holder_to_row(page, extraction, holder))
-        fh.flush()
-
     if output is None:
-        write_stream(sys.stdout)
-        log.info("exported %d row(s)", len(rows))
+        write_jsonl(sys.stdout, rows)
+        log.info("exported %d record(s)", len(rows))
         return
 
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
     total = 0
     for group, group_rows in groups.items():
-        path = out_dir / f"{group}.csv"
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            writer = csv.DictWriter(
-                fh,
-                fieldnames=EXPORT_COLUMNS,
-                extrasaction="ignore",
-                lineterminator="\n",
-            )
-            writer.writeheader()
-            for page, extraction, holder in group_rows:
-                writer.writerow(holder_to_row(page, extraction, holder))
+        path = out_dir / f"{group}.jsonl"
+        with open(path, "w", encoding="utf-8") as fh:
+            write_jsonl(fh, group_rows)
         total += len(group_rows)
-        log.info("wrote %d row(s) → %s", len(group_rows), path)
-    log.info("exported %d row(s) across %d dataset(s)", total, len(groups))
+        log.info("wrote %d record(s) → %s", len(group_rows), path)
+    log.info("exported %d record(s) across %d dataset(s)", total, len(groups))
 
 
 if __name__ == "__main__":

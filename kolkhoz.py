@@ -114,111 +114,204 @@ MIN_IMAGES = 10
 MAX_IMG_DENSITY = 0.1
 
 _INSTRUCTIONS_HEAD = """\
-You extract political position holders from the content of a single web page.
+# Role
 
-A "holder" is a specific, named human who holds a named position (office, seat,
-title, or role) at the organisation the page is about — e.g. a council member,
-board director, judge, minister, or chair.
+You extract political position holders from the content of a single web page
+and return structured data only.
 
-Rules:
-- Return one entry per (human, position) pair. If one person holds two
-  positions, return two entries.
-- Only extract humans actually named on the page. Do not invent people.
-- Ignore names that are not position holders (authors, contacts, mentions).
-- Preserve source wording. Do not normalize names, countries, or dates —
-  copy them as written. Dates stay as source strings (e.g. '3 May 2022').
-- Leave any field blank (null, or empty list for evidence) when the page
-  does not state it. Do not infer values from context.
-- For evidence_quotes, lift one or more short, verbatim phrases from the
-  page that support this (person, position) observation. Prefer the
-  sentence that names the person and the role together. If the page only
-  states it in a table or list with no prose, return an empty list.
+# Definitions
+
+- A holder is a named human who holds a named position — an office, seat,
+  title, or role — at the organisation the page is about.
+- A person can hold several positions; list each as a separate entry under
+  that person. The person's own facts (date of birth, biography, country)
+  are stated once on the person, not repeated per position.
+- Not holders: founders no longer in office, authors, contacts, and anyone
+  merely mentioned. A name on the page is not enough — the person must hold
+  a position there.
+
+# Goal and success
+
+Return one person record per holder, with every position they hold and the
+facts the page states. The result is correct when every holder is captured
+once, every non-holder is excluded, and nothing is invented. If the page
+names no holder, return an empty persons list.
+
+# How to work
+
+For each position, first find the verbatim phrase on the page that ties the
+person to the role. Put that phrase in evidence_quotes, then fill the other
+fields only from what the page states. Every field must trace to text that is
+actually on the page.
+
+# Constraints
+
+- Only extract humans the page names. Never invent a person or a position.
+- Copy names, countries, and dates exactly as written (e.g. "3 May 2022").
+  Never normalize, expand, translate, or reformat.
+- Leave a field null, and evidence_quotes empty, when the page does not state
+  it. Never infer a value from context or fill it from world knowledge.
+- person.country is the person's country; position.jurisdiction is the place
+  the office covers. Use only what the page states; null otherwise.
+
+# Examples
+
+<example>
+Page (Riverside City Council):
+"Lucia Fernández has served as Mayor of Riverside since 3 May 2022. Born in
+1971 in Spain, she is also the council's representative to the Regional
+Transport Authority. For inquiries, contact the registrar David Kim at
+david.kim@riverside.gov."
+</example>
+
+<answer>
+{
+  "persons": [
+    {
+      "name": "Lucia Fernández",
+      "dob": "1971",
+      "bio": null,
+      "country": "Spain",
+      "positions": [
+        {
+          "name": "Mayor",
+          "description": null,
+          "jurisdiction": "Riverside",
+          "start_date": "3 May 2022",
+          "end_date": null,
+          "evidence_quotes": [
+            "Lucia Fernández has served as Mayor of Riverside since 3 May 2022"
+          ]
+        },
+        {
+          "name": "representative to the Regional Transport Authority",
+          "description": null,
+          "jurisdiction": null,
+          "start_date": null,
+          "end_date": null,
+          "evidence_quotes": [
+            "she is also the council's representative to the Regional Transport Authority"
+          ]
+        }
+      ]
+    }
+  ]
+}
+</answer>
+David Kim is a contact, not a holder, so he is excluded.
+
+<example>
+Page (Cedar Valley Public Library):
+"The Cedar Valley Public Library was founded in 1923 by Eleanor Vance to
+bring literature to the valley. Today it serves over forty thousand members."
+</example>
+
+<answer>
+{ "persons": [] }
+</answer>
+Eleanor Vance is a historical founder with no current position, so the result
+is empty.
 """
 
 _INSTRUCTIONS_WITH_SCREENSHOT = """\
-- The full-page screenshot is attached as overlapping image tiles. Read the
-  tiles together with the text as one page. Tiles overlap, so the same
-  person/position may recur — extract each holder once.
+
+# Screenshot
+
+The full-page screenshot is attached as overlapping image tiles. Read the
+tiles together with the text as one page. Tiles overlap, so the same person or
+position may recur across tiles — extract each holder once.
 """
 
 
-class Holder(BaseModel):
-    human: str = Field(
-        description="Full name of the person, exactly as written on the page."
-    )
-    position: str | None = Field(
-        default=None,
-        description=(
-            "Specific position title the person holds, e.g. 'Council Member'. "
-            "Use the most specific title shown; if the page is about an "
-            "organisation and the title omits it, you may name the body. "
-            "Omit (null) only if the page names the person but states no "
-            "specific title for them."
-        ),
-    )
-    person_dob: str | None = Field(
-        default=None,
-        description=(
-            "The person's date of birth as written on the page (source string, "
-            "no normalization). Null if not stated."
-        ),
-    )
-    person_bio: str | None = Field(
-        default=None,
-        description=(
-            "A short biographical note about the person, taken verbatim or "
-            "near-verbatim from the page. Null if none is given."
-        ),
-    )
-    person_country: str | None = Field(
-        default=None,
-        description=(
-            "Country associated with the person, as written on the page "
-            "(source wording, no territory-code normalization). Null if not stated."
-        ),
-    )
-    position_description: str | None = Field(
-        default=None,
-        description=(
-            "Description of the position as stated on the page, verbatim or "
-            "near-verbatim. Null if none is given."
-        ),
-    )
-    position_jurisdiction: str | None = Field(
-        default=None,
-        description=(
-            "Jurisdiction the position operates in, as written on the page "
-            "(source wording, no normalization). Null if not stated."
-        ),
-    )
-    position_start_date: str | None = Field(
-        default=None,
-        description=(
-            "When the person started in this position, as written on the page "
-            "(source string, no normalization). Null if not stated."
-        ),
-    )
-    position_end_date: str | None = Field(
-        default=None,
-        description=(
-            "When the person left (or will leave) this position, as written on "
-            "the page (source string, no normalization). Null if not stated."
-        ),
-    )
+# Structured-output schema for extraction. Nested: a Person holds many
+# Positions; person-level facts live on the person. Storage and export stay
+# flat (one row per person-position), so ``flatten_persons`` is the single
+# boundary that owns the nested→flat mapping. Because Structured Outputs emit
+# fields in schema order, ``evidence_quotes`` is first on Position so the model
+# commits to a verbatim anchor before filling the other fields.
+class Position(BaseModel):
     evidence_quotes: list[str] = Field(
         default_factory=list,
         description=(
-            "One or more short quotes lifted verbatim from the page that "
-            "support this (person, position) observation. Empty list if the "
-            "page states it only in a table or list with no prose."
+            "Short verbatim phrases from the page that tie this person to this "
+            "position. Lift them first; they anchor the other fields. Empty if "
+            "stated only in a table or list with no prose."
         ),
+    )
+    name: str | None = Field(
+        default=None,
+        description=(
+            "Name of the position the person holds, e.g. 'Council Member'. Use "
+            "the most specific title shown on the page. Null only if the page "
+            "names the person but states no title."
+        ),
+    )
+    description: str | None = Field(
+        default=None, description="Description of the position as stated on the page."
+    )
+    jurisdiction: str | None = Field(
+        default=None, description="Place the position covers, as written on the page."
+    )
+    start_date: str | None = Field(
+        default=None, description="When the person started, as written on the page."
+    )
+    end_date: str | None = Field(
+        default=None,
+        description="When the person left or will leave, as written on the page.",
+    )
+
+
+class Person(BaseModel):
+    name: str = Field(description="Full name of the person, exactly as written.")
+    dob: str | None = Field(
+        default=None, description="Date of birth as written on the page."
+    )
+    bio: str | None = Field(
+        default=None, description="Short biographical note from the page."
+    )
+    country: str | None = Field(
+        default=None,
+        description="Country associated with the person, as written on the page.",
+    )
+    # A holder holds at least one position; we never emit a person with none.
+    positions: list[Position] = Field(
+        min_length=1, description="Every position this person holds on the page."
     )
 
 
 class Extraction(BaseModel):
-    holders: list[Holder] = Field(
-        description="Position holders found on the page. Empty if none."
+    persons: list[Person] = Field(
+        default_factory=list,
+        description="Current position holders on the page. Empty list if none.",
     )
+
+
+def flatten_persons(extraction: Extraction) -> list[dict]:
+    """Flatten the nested extraction into one dict per (person, position).
+
+    Person-level fields repeat across a person's positions so every flat row
+    is self-contained — matching the Holder table and the JSONL export. The
+    dict keys are the flat storage/export names; this is the only place that
+    knows how nested maps to flat.
+    """
+    rows: list[dict] = []
+    for person in extraction.persons:
+        for position in person.positions:
+            rows.append(
+                {
+                    "person_name": person.name,
+                    "position_name": position.name,
+                    "person_dob": person.dob,
+                    "person_bio": person.bio,
+                    "person_country": person.country,
+                    "position_description": position.description,
+                    "position_jurisdiction": position.jurisdiction,
+                    "position_start_date": position.start_date,
+                    "position_end_date": position.end_date,
+                    "evidence_quotes": position.evidence_quotes,
+                }
+            )
+    return rows
 
 
 def extract(text: str, screenshot_blob: bytes | None) -> Extraction:
@@ -242,11 +335,14 @@ def extract(text: str, screenshot_blob: bytes | None) -> Extraction:
         text_format=Extraction,
         reasoning={"effort": REASONING_EFFORT},
     )
+    extraction = response.output_parsed
+    positions = sum(len(p.positions) for p in extraction.persons)
     log.info(
-        "  → final: %d holder(s)",
-        len(response.output_parsed.holders),
+        "  → final: %d person(s), %d position(s)",
+        len(extraction.persons),
+        positions,
     )
-    return response.output_parsed
+    return extraction
 
 
 def screenshot_parts(screenshot_blob: bytes) -> list[dict]:
@@ -257,12 +353,7 @@ def screenshot_parts(screenshot_blob: bytes) -> list[dict]:
     return [
         {
             "type": "input_text",
-            "text": (
-                f"The {len(tiles)} image(s) below are overlapping tiles "
-                "of a single full-page screenshot of the same page. Read "
-                "them together as one page. Tiles overlap, so the same "
-                "person/position may recur — extract each holder once."
-            ),
+            "text": "Overlapping tiles of the full-page screenshot follow:",
         },
         *[
             {
@@ -403,11 +494,11 @@ def holder_to_record(
         "snapshot_id": extraction.snapshot_id,
         "snapshot_retrieved_at": extraction.snapshot_retrieved_at,
         "organisation_name": page.organization,
-        "person_name": holder.human,
+        "person_name": holder.person_name,
         "person_dob": holder.person_dob,
         "person_bio": holder.person_bio,
         "person_country": holder.person_country,
-        "position_name": holder.position,
+        "position_name": holder.position_name,
         "position_description": holder.position_description,
         "position_jurisdiction": holder.position_jurisdiction,
         "position_start_date": holder.position_start_date,
@@ -515,7 +606,7 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                     if not is_blank(blob):
                         screenshot_blob = blob
             extraction = extract(text, screenshot_blob)
-            holders = [h.model_dump() for h in extraction.holders]
+            holders = flatten_persons(extraction)
             log.info("%s → %d holder(s)", snapshot["url"], len(holders))
 
             n += 1
@@ -536,8 +627,8 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
             for h in holders:
                 extraction_row.holders.append(
                     HolderRow(
-                        human=h["human"],
-                        position=h["position"],
+                        person_name=h["person_name"],
+                        position_name=h["position_name"],
                         person_dob=h["person_dob"],
                         person_bio=h["person_bio"],
                         person_country=h["person_country"],

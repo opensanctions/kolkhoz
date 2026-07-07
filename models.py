@@ -13,7 +13,7 @@ Three tables:
                 read, which model extracted from it, and when. Re-running
                 extraction on a new snapshot makes a new row; Pravda tells
                 us when content changed.
-- ``Holder``    a named (human, position) pair found in one Extraction.
+- ``Holder``    a named (person, position) pair found in one Extraction.
                 Many per Extraction.
 """
 
@@ -70,10 +70,10 @@ class Holder(Base):
     extraction_id: Mapped[int] = mapped_column(
         ForeignKey("extractions.id", ondelete="CASCADE"), index=True
     )
-    human: Mapped[str]
-    # The position title the model extracted; may be None when the page
-    # names the person but states no specific title.
-    position: Mapped[str | None]
+    person_name: Mapped[str]
+    # The position the model extracted; may be None when the page names the
+    # person but states no specific title.
+    position_name: Mapped[str | None]
     # All fields below are source wording, verbatim. Dates are source strings.
     # Blank (None) when the page does not state them.
     person_dob: Mapped[str | None]

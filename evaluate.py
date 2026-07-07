@@ -7,7 +7,7 @@ names, expanded role codes, merged variants), so a faithful verbatim
 extraction fails while a normalized guess passes. Here we own both ends
 instead: each fixture is an authored page whose holders we know exactly. The
 harness renders it to HTML, derives the plaintext the model reads, runs the
-real ``kolkhoz.extract``, and scores the returned (human, position) pairs
+real ``kolkhoz.extract``, and scores the returned (person, position) pairs
 against what we put in. Exact-match is honest again.
 
 Fixtures live as JSON in ``fixtures/`` (one file per page: an organization, two lists of holders (text and
@@ -29,7 +29,7 @@ Scope is deliberately narrow:
   miss the pixel-only ones). Both screenshot triggers mirror real branches
   of ``kolkhoz.screenshot_reason``.
 
-- **(human, position) pairs only**, scored per fixture by exact string
+- **(person, position) pairs only**, scored per fixture by exact string
   equality. Richer fields (dob, bio, dates) can be added once fixtures carry
   them.
 
@@ -79,10 +79,10 @@ FONT_PATH = Path(__file__).parent / "assets" / "DejaVuSans.ttf"
 
 
 class SyntheticHolder(BaseModel):
-    """A single (human, position) pair the page states and we expect back."""
+    """A single (person, position) pair the page states and we expect back."""
 
-    human: str
-    position: str
+    person_name: str
+    position_name: str
 
 
 class SyntheticPage(BaseModel):
@@ -126,7 +126,7 @@ def render_html(page: SyntheticPage) -> str:
         )
         for h in page.text_holders:
             parts.append(
-                f"<tr><td>{escape(h.human)}</td><td>{escape(h.position)}</td></tr>"
+                f"<tr><td>{escape(h.person_name)}</td><td>{escape(h.position_name)}</td></tr>"
             )
         parts.append("</tbody></table>")
     if page.extra_html:
@@ -186,7 +186,7 @@ def render_screenshot(page: SyntheticPage) -> bytes:
     # Drawn from screenshot_holders (not the rendered HTML), so the screenshot
     # can carry the full roster regardless of text_holders.
     head = page.organization
-    rows = [(h.human, h.position) for h in page.screenshot_holders]
+    rows = [(h.person_name, h.position_name) for h in page.screenshot_holders]
     distractors: list[str] = []
     if page.extra_html:
         extra = BeautifulSoup(page.extra_html, "html.parser")
@@ -236,7 +236,7 @@ def render_screenshot(page: SyntheticPage) -> bytes:
 
 
 # ===========================================================================
-# Scoring — (human, position) pairs, exact match, micro/macro
+# Scoring — (person, position) pairs, exact match, micro/macro
 # ===========================================================================
 
 
@@ -250,7 +250,7 @@ def prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
 def score_page(
     expected: set[tuple[str, str]], got: set[tuple[str, str]]
 ) -> tuple[int, int, int]:
-    """TP/FP/FN for exact set equality of (human, position) pairs."""
+    """TP/FP/FN for exact set equality of (person, position) pairs."""
     tp = len(expected & got)
     fp = len(got - expected)
     fn = len(expected - got)
@@ -314,14 +314,22 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
         screenshot_blob = render_screenshot(page) if page.screenshot_holders else None
         extraction = extract(text, screenshot_blob)
 
-        expected = {(h.human, h.position) for h in page.text_holders} | {
-            (h.human, h.position) for h in page.screenshot_holders
+        expected = {(h.person_name, h.position_name) for h in page.text_holders} | {
+            (h.person_name, h.position_name) for h in page.screenshot_holders
         }
-        got = {(h.human, h.position) for h in extraction.holders}
+        got = {
+            (person.name, position.name)
+            for person in extraction.persons
+            for position in person.positions
+        }
         tp, fp, fn = score_page(expected, got)
         rows.append((page, expected, got, tp, fp, fn))
 
-        log.info("%s: %d holder(s)", page.id, len(extraction.holders))
+        log.info(
+            "%s: %d holder(s)",
+            page.id,
+            sum(len(p.positions) for p in extraction.persons),
+        )
 
     # ---- per-fixture table ------------------------------------------------
     print(file=sys.stderr)

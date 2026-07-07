@@ -1,10 +1,10 @@
 {
   "organization": "Northwind Energy Corp",
   "screenshot_holders": [
-    {"human": "Marek Dvořák", "position": "Chair of the Board"},
-    {"human": "Aisha Rahman", "position": "Chief Executive Officer"},
-    {"human": "Hiroshi Tanaka", "position": "Chief Financial Officer"},
-    {"human": "Elena Petrova", "position": "Chief Operating Officer"},
-    {"human": "Samuel Okafor", "position": "Independent Director"}
+    {"person_name": "Marek Dvořák", "position_name": "Chair of the Board"},
+    {"person_name": "Aisha Rahman", "position_name": "Chief Executive Officer"},
+    {"person_name": "Hiroshi Tanaka", "position_name": "Chief Financial Officer"},
+    {"person_name": "Elena Petrova", "position_name": "Chief Operating Officer"},
+    {"person_name": "Samuel Okafor", "position_name": "Independent Director"}
   ]
 }

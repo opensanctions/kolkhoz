@@ -1,15 +1,15 @@
 {
   "organization": "Meridian Health Foundation",
   "text_holders": [
-    {"human": "Ingrid Sandberg", "position": "Chair of the Board"},
-    {"human": "Dmitri Volkov", "position": "Chief Executive Officer"}
+    {"person_name": "Ingrid Sandberg", "position_name": "Chair of the Board"},
+    {"person_name": "Dmitri Volkov", "position_name": "Chief Executive Officer"}
   ],
   "screenshot_holders": [
-    {"human": "Ingrid Sandberg", "position": "Chair of the Board"},
-    {"human": "Dmitri Volkov", "position": "Chief Executive Officer"},
-    {"human": "Adaeze Okoro", "position": "Chief Medical Officer"},
-    {"human": "Tomás Ribeiro", "position": "Chief Financial Officer"},
-    {"human": "Yuki Nakamura", "position": "Chief Operating Officer"},
-    {"human": "Françoise Lévêque", "position": "General Counsel"}
+    {"person_name": "Ingrid Sandberg", "position_name": "Chair of the Board"},
+    {"person_name": "Dmitri Volkov", "position_name": "Chief Executive Officer"},
+    {"person_name": "Adaeze Okoro", "position_name": "Chief Medical Officer"},
+    {"person_name": "Tomás Ribeiro", "position_name": "Chief Financial Officer"},
+    {"person_name": "Yuki Nakamura", "position_name": "Chief Operating Officer"},
+    {"person_name": "Françoise Lévêque", "position_name": "General Counsel"}
   ]
 }

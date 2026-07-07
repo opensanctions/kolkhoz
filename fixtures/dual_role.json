@@ -1,7 +1,7 @@
 {
   "organization": "Atlas Holdings",
   "text_holders": [
-    {"human": "Priya Nair", "position": "Chief Operating Officer"},
-    {"human": "Priya Nair", "position": "Chief Financial Officer"}
+    {"person_name": "Priya Nair", "position_name": "Chief Operating Officer"},
+    {"person_name": "Priya Nair", "position_name": "Chief Financial Officer"}
   ]
 }

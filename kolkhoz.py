@@ -307,7 +307,6 @@ class InputRow(BaseModel):
     """One row of the input CSV: a URL plus its known metadata."""
 
     organization: str
-    position: str
     url: str
 
 
@@ -318,11 +317,10 @@ def load_input(path: str) -> list[InputRow]:
         return [
             InputRow(
                 organization=row["organization"].strip(),
-                position=row["position"].strip(),
                 url=row["url"].strip(),
             )
             for row in reader
-            if row["url"].strip() and row["position"].strip()
+            if row["url"].strip()
         ]
 
 
@@ -347,7 +345,6 @@ async def run_snapshot_csv(
                     PageRow(
                         url=row.url,
                         organization=row.organization,
-                        position=row.position,
                         dataset=dataset,
                     )
                 )
@@ -410,11 +407,10 @@ def build_export_rows(
 
 def holder_to_row(
     page: PageRow, extraction: ExtractionRow, holder: HolderRow
-) -> dict[str, str]:
+) -> dict[str, str | None]:
     """Flatten one holder observation into a CSV row dict.
 
-    ``evidence_quotes`` (a list) is joined with newlines. ``position_name``
-    falls back to the page-level position when the model left it blank.
+    ``evidence_quotes`` (a list) is joined with newlines.
     """
     return {
         "dataset": page.dataset,
@@ -423,14 +419,14 @@ def holder_to_row(
         "snapshot_retrieved_at": extraction.snapshot_retrieved_at.isoformat(),
         "organisation_name": page.organization,
         "person_name": holder.human,
-        "person_dob": holder.person_dob or "",
-        "person_bio": holder.person_bio or "",
-        "person_country": holder.person_country or "",
-        "position_name": holder.position or page.position,
-        "position_description": holder.position_description or "",
-        "position_jurisdiction": holder.position_jurisdiction or "",
-        "position_start_date": holder.position_start_date or "",
-        "position_end_date": holder.position_end_date or "",
+        "person_dob": holder.person_dob,
+        "person_bio": holder.person_bio,
+        "person_country": holder.person_country,
+        "position_name": holder.position,
+        "position_description": holder.position_description,
+        "position_jurisdiction": holder.position_jurisdiction,
+        "position_start_date": holder.position_start_date,
+        "position_end_date": holder.position_end_date,
         "evidence_quotes": "\n".join(holder.evidence_quotes),
     }
 

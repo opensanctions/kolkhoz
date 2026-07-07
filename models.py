@@ -7,7 +7,7 @@ Pravda snapshot we extracted from.
 Three tables:
 
 - ``Page``      one row per distinct URL. Carries the CSV metadata
-                (organization, fallback position, dataset) and is the unit
+                (organization, dataset) and is the unit
                 re-extraction is driven from.
 - ``Extraction`` one per (Page, snapshot). Records which Pravda snapshot we
                 read, which model extracted from it, when, and the resulting
@@ -40,9 +40,6 @@ class Page(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     url: Mapped[str] = mapped_column(unique=True, index=True)
     organization: Mapped[str]
-    # Fallback position from the dataset, applied to holders the model left
-    # without a title.
-    position: Mapped[str]
     # Which CSV / dataset this page was sourced from.
     dataset: Mapped[str]
 
@@ -81,7 +78,8 @@ class Holder(Base):
         ForeignKey("extractions.id", ondelete="CASCADE"), index=True
     )
     human: Mapped[str]
-    # May be null on the page; filled from Page.position at write time.
+    # The position title the model extracted; may be None when the page
+    # names the person but states no specific title.
     position: Mapped[str | None]
     # All fields below are source wording, verbatim. Dates are source strings.
     # Blank (None) when the page does not state them.

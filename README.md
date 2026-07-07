@@ -32,7 +32,7 @@ in `.env` (a local dir or a `gs://`/`s3://` bucket prefix):
 # Snapshot all URLs from every CSV in the input directory (INPUT_BASE_PATH)
 # through Pravda, recording pages in the DB. Each CSV is its own dataset,
 # named after the file's stem.
-uv run python kolkhoz.py snapshot-csv
+uv run python kolkhoz.py snapshot
 
 # Extract position holders from the latest snapshot of each page in the DB
 uv run python kolkhoz.py extract

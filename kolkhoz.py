@@ -459,7 +459,7 @@ def cli() -> None:
 
 
 @cli.command(
-    "snapshot-csv",
+    "snapshot",
     help="Snapshot all URLs from the CSVs in the input directory through Pravda.",
 )
 @click.option(
@@ -469,7 +469,7 @@ def cli() -> None:
     default=5,
     help="Max concurrent requests to Pravda.",
 )
-def snapshot_csv_cmd(concurrency: int) -> None:
+def snapshot_cmd(concurrency: int) -> None:
     Path(os.environ["KOLKHOZ_DB"]).parent.mkdir(parents=True, exist_ok=True)
     inputs = load_inputs(os.environ["INPUT_BASE_PATH"])
     log.info("%d input CSV(s)", len(inputs))

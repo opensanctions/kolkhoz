@@ -71,14 +71,13 @@ class Holder(Base):
         ForeignKey("extractions.id", ondelete="CASCADE"), index=True
     )
     person_name: Mapped[str]
-    # The position the model extracted; may be None when the page names the
-    # person but states no specific title.
-    position_name: Mapped[str | None]
+    position_name: Mapped[str]
     # All fields below are source wording, verbatim. Dates are source strings.
     # Blank (None) when the page does not state them.
     person_dob: Mapped[str | None]
     person_bio: Mapped[str | None]
-    person_country: Mapped[str | None]
+    person_countries: Mapped[list[str]] = mapped_column(JSON)
+    position_organization: Mapped[str | None]
     position_description: Mapped[str | None]
     position_jurisdiction: Mapped[str | None]
     position_start_date: Mapped[str | None]

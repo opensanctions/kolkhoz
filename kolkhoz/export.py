@@ -25,9 +25,8 @@ log = logging.getLogger("kolkhoz")
 # The flat JSONL schema handed to zavod. One record per (person, position)
 # observation extracted from one snapshot. Fixed key order, UTF-8, source
 # wording preserved (no FtM normalization — that is zavod's job). Every
-# field is a scalar — no nested objects — except ``evidence_quotes``, which
-# stays a native list[str]; a list of supporting quotes is the reason we
-# left CSV behind.
+# field is a scalar — no nested objects — except ``person_countries`` and
+# ``evidence_quotes``, which stay native lists.
 EXPORT_FIELDS = [
     "dataset",
     "source_url",
@@ -37,8 +36,9 @@ EXPORT_FIELDS = [
     "person_name",
     "person_dob",
     "person_bio",
-    "person_country",
+    "person_countries",
     "position_name",
+    "position_organization",
     "position_description",
     "position_jurisdiction",
     "position_start_date",
@@ -57,7 +57,8 @@ def holder_to_record(
     """Flatten one holder observation into a JSONL record.
 
     The schema is flat — every field is a scalar — except
-    ``evidence_quotes``, which stays a native list[str]. All dates are
+    ``person_countries`` and ``evidence_quotes``, which stay native lists.
+    All dates are
     plain source strings, copied verbatim with no parsing or reformatting.
     """
     record = {
@@ -69,8 +70,9 @@ def holder_to_record(
         "person_name": holder.person_name,
         "person_dob": holder.person_dob,
         "person_bio": holder.person_bio,
-        "person_country": holder.person_country,
+        "person_countries": holder.person_countries,
         "position_name": holder.position_name,
+        "position_organization": holder.position_organization,
         "position_description": holder.position_description,
         "position_jurisdiction": holder.position_jurisdiction,
         "position_start_date": holder.position_start_date,

@@ -1,97 +1,26 @@
-"""Score the extraction pipeline against hand-authored fixture pages.
+"""Score extraction against hand-authored page fixtures.
 
-The pipeline is meant to read holders *verbatim* from a page — names, titles,
-dates copied as written. Scoring it against a third-party golden set does not
-work: those sets come from scrapers that have already normalized (title-cased
-names, expanded role codes, merged variants), so a faithful verbatim
-extraction fails while a normalized guess passes. Here we own both ends
-instead: each fixture is an authored HTML page whose holders we know exactly.
-The harness derives the plaintext the model reads (the same derivation the
-live pipeline applies to Pravda's captured HTML), runs the real
-``kolkhoz.extract``, flattens the result with the production
-``flatten_persons``, and scores against the answer key. Exact-match is honest
-again.
+Each directory under ``fixtures/`` contains ``page.html``, ``expected.json``,
+and optionally ``screenshot.png`` and ``url.txt``. The harness derives the
+same flattened plaintext used in production, extracts document metadata, runs
+the real model call, flattens its nested result, and exact-compares it with the
+answer key.
 
-Fixtures live as directories under ``fixtures/`` — one per page, named after
-the fixture id. Each directory holds:
+Every expected holder states the complete flat schema. A holding is keyed by
+person, title, organisation, start date, and end date so distinct terms of the
+same office remain separate. The remaining person and position fields are
+compared on matched holdings. Evidence quotes remain part of production output
+but are deliberately outside evaluation scope for now. Duplicate observations
+are reported rather than silently collapsed, and empty agreement scores as
+perfect.
 
-- ``page.html``      the page itself, authored in whatever shape the case
-                     needs (a roster table, a prose bio, a news lead, ...).
-                     Variety is the point: real failure modes live in the
-                     layout, so fixtures differ in structure on purpose.
-- ``expected.json``  the answer key (the full-schema format below).
-- ``screenshot.png`` optional. When present it is tiled and attached as the
-                     page screenshot, driving the image path. It is a browser
-                     capture of ``page.html``, so the names appear in *both*
-                     the derived text and the image: this exercises the image
-                     path and cross-channel consistency (no double-counting),
-                     not the "thin text, names only in pixels" case. To probe
-                     that case the pixel-only names would have to live inside
-                     real ``<img>`` elements rather than page text.
-
-The answer key is an object::
-
-    {
-      "evidence_required": false,
-      "holders": [
-        {
-          "person_name": "Marek Dvořák",
-          "person_dob": null,
-          "person_bio": null,
-          "person_country": null,
-          "position_name": "Chair of the Board",
-          "position_description": null,
-          "position_jurisdiction": null,
-          "position_start_date": null,
-          "position_end_date": null
-        }
-      ]
-    }
-
-- ``evidence_required`` is a fixture-level boolean. When true, every matched
-  holder must carry at least one verbatim evidence quote (prose-based
-  fixtures, where the page ties holders to roles in running text). When
-  false, holders may carry none (table/list-only fixtures, where the schema
-  permits empty evidence).
-- ``holders`` is the complete flat extraction schema — all nine scalar keys
-  explicit, including nulls. ``person_name`` and ``position_name`` are the
-  match key; the other seven are compared field by field on matched holders.
-
-The answer key covers every named human whom the page explicitly ties to a
-named position, without judging whether that position is relevant downstream.
-Current, former, honorary, incidental, and contact roles all belong in the
-key. A name tied only to an action or personal relationship does not: for
-example, ``founded by Jane Doe`` does not state that Jane held a position named
-``Founder``. Names without explicit positions need no separate declaration;
-they are simply absent from ``holders``.
-
-Scoring has four layers:
-
-1. **Pair match** — expected and actual holders are keyed by exact
-   ``(person_name, position_name)``. Pair-level micro/macro P/R/F1 are
-   reported as before. Duplicate keys in the answer key fail loudly
-   (ambiguous key); duplicates in the model output are reported, never
-   silently collapsed.
-2. **Field comparison** — for every matched pair, the remaining seven scalar
-   fields are compared exactly, and every gap is printed.
-3. **Evidence** — every actual evidence quote is validated as a verbatim
-   (whitespace-normalized, case-sensitive) substring of the page plaintext.
-   A quote that is not on the page is invalid. Evidence is *required* when the
-   fixture is prose-based; table/list-only fixtures permit none.
-4. **Complete holders** — a matched holder is *complete* when its pair
-   matches, every scalar field matches, and its evidence is valid (and, when
-   required, present). Reported per fixture and in aggregate.
-
-Empty fixtures (``holders: []``) score as a flawless empty extraction.
-
-The harness calls the real model via ``kolkhoz.extract`` (it spends tokens and
-reads ``.env``) and is fully decoupled from Pravda and the database: no
-snapshots, no Pages, no Extractions on disk — just read, extract, score.
+The harness spends model tokens and reads ``.env``, but does not use Pravda or
+the database.
 
 Usage:
 
-    uv run python evaluate.py    # run all fixtures in fixtures/
-    uv run python evaluate.py -v # per-holder detail
+    uv run python evaluate.py
+    uv run python evaluate.py -v
 """
 
 import json
@@ -105,31 +34,32 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 
 from kolkhoz.config import load_config
-from kolkhoz.extract import extract, flatten_persons
+from kolkhoz.extract import extract, flatten_persons, metadata_from_html
 
 log = logging.getLogger("evaluate")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-# The flat extraction/storage scalar schema. ``person_name`` and
-# ``position_name`` are the match key; the rest are compared field by field on
-# matched holders. Every expected holder must state all nine explicitly,
-# including nulls. Actual rows from ``flatten_persons`` additionally carry
-# ``evidence_quotes`` (a list), which is validated — not pinned — against the
-# page plaintext.
+# The flat extraction/storage schema. Organisation and term dates join person
+# and title in the observation key so repeated terms of the same office remain
+# distinct. Remaining fields are exact-compared on matched observations.
 HOLDER_PERSON_NAME = "person_name"
 HOLDER_POSITION_NAME = "position_name"
-HOLDER_FIELDS = [
-    "person_dob",
-    "person_bio",
-    "person_country",
-    "position_description",
-    "position_jurisdiction",
+HOLDER_KEY_FIELDS = [
+    HOLDER_PERSON_NAME,
+    HOLDER_POSITION_NAME,
+    "position_organization",
     "position_start_date",
     "position_end_date",
 ]
-HOLDER_SCALAR_KEYS = [HOLDER_PERSON_NAME, HOLDER_POSITION_NAME, *HOLDER_FIELDS]
-EVIDENCE_QUOTES = "evidence_quotes"
+HOLDER_FIELDS = [
+    "person_dob",
+    "person_bio",
+    "person_countries",
+    "position_description",
+    "position_jurisdiction",
+]
+HOLDER_EXPECTED_KEYS = [*HOLDER_KEY_FIELDS, *HOLDER_FIELDS]
 
 
 # ===========================================================================
@@ -143,15 +73,15 @@ class Fixture:
 
     ``html`` is the page body; the model reads the plaintext derived from it
     (same derivation the live pipeline applies to Pravda's captured HTML).
-    ``expected`` is the list of flat holder dicts — each carries every scalar
-    key. ``screenshot`` is attached iff ``screenshot.png`` sits beside the
+    ``expected`` is the list of complete flat holder dicts. ``screenshot`` is
+    attached iff ``screenshot.png`` sits beside the
     HTML.
     """
 
     id: str
     html: str
-    evidence_required: bool
-    expected: list[dict[str, str | None]]
+    url: str
+    expected: list[dict]
     screenshot: bytes | None
 
 
@@ -166,8 +96,7 @@ def html_to_text(html: str) -> str:
     ``get_text`` is a ``textContent``-style walk — it returns all text in the
     DOM regardless of CSS, unlike ``inner_text`` which drops anything not
     visibly rendered (opensanctions/pravda#14). This is the same derivation
-    the live pipeline applies to Pravda's captured HTML, and the same text
-    evidence quotes are validated against.
+    the live pipeline applies to Pravda's captured HTML.
     """
     soup = BeautifulSoup(html, "html.parser")
     return " ".join(soup.get_text(separator=" ").split())
@@ -186,10 +115,10 @@ def prf(tp: int, fp: int, fn: int) -> tuple[float, float, float]:
 
 
 def score_page(
-    expected: set[tuple[str | None, str | None]],
-    got: set[tuple[str | None, str | None]],
+    expected: set[tuple],
+    got: set[tuple],
 ) -> tuple[int, int, int]:
-    """TP/FP/FN for exact set equality of (person_name, position_name) pairs."""
+    """TP/FP/FN for exact set equality of holding observation keys."""
     tp = len(expected & got)
     fp = len(got - expected)
     fn = len(expected - got)
@@ -197,8 +126,8 @@ def score_page(
 
 
 def page_prf(
-    expected: set[tuple[str | None, str | None]],
-    got: set[tuple[str | None, str | None]],
+    expected: set[tuple],
+    got: set[tuple],
 ) -> tuple[float, float, float]:
     """Per-fixture P/R/F1, scoring empty-agreement as perfect.
 
@@ -219,57 +148,56 @@ def page_prf(
 # ===========================================================================
 
 
-def _holder_key(holder: dict[str, str | None]) -> tuple[str | None, str | None]:
-    return (holder[HOLDER_PERSON_NAME], holder[HOLDER_POSITION_NAME])
+def _holder_key(holder: dict) -> tuple:
+    return tuple(holder[name] for name in HOLDER_KEY_FIELDS)
 
 
-def _parse_holder(raw: object) -> dict[str, str | None]:
+def _parse_holder(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise TypeError(f"expected holder must be an object, got {type(raw).__name__}")
-    if set(raw) != set(HOLDER_SCALAR_KEYS):
+    if set(raw) != set(HOLDER_EXPECTED_KEYS):
         raise ValueError(
-            f"expected holder must have exactly {HOLDER_SCALAR_KEYS}, got {sorted(raw)}"
+            f"expected holder must have exactly {HOLDER_EXPECTED_KEYS}, "
+            f"got {sorted(raw)}"
         )
-    holder: dict[str, str | None] = {}
-    for key in HOLDER_SCALAR_KEYS:
+    holder: dict = {}
+    for key in HOLDER_EXPECTED_KEYS:
         value = raw[key]
-        if value is not None and not isinstance(value, str):
+        if key == "person_countries":
+            if not isinstance(value, list) or not all(
+                isinstance(country, str) for country in value
+            ):
+                raise TypeError("person_countries must be a list of strings")
+        elif value is not None and not isinstance(value, str):
             raise TypeError(
                 f"{key} must be a string or null, got {type(value).__name__}"
             )
         holder[key] = value
     if not holder[HOLDER_PERSON_NAME]:
         raise ValueError("person_name must be a non-empty string")
+    if not holder[HOLDER_POSITION_NAME]:
+        raise ValueError("position_name must be a non-empty string")
     return holder
 
 
-def _parse_expected(raw: object) -> tuple[bool, list[dict[str, str | None]]]:
+def _parse_expected(raw: object) -> list[dict]:
     if not isinstance(raw, dict):
         raise TypeError(f"expected.json must be an object, got {type(raw).__name__}")
-    if set(raw) != {"evidence_required", "holders"}:
-        raise ValueError(
-            "expected.json must have keys {evidence_required, holders}, "
-            f"got {sorted(raw)}"
-        )
-    evidence_required = raw["evidence_required"]
-    if not isinstance(evidence_required, bool):
-        raise TypeError("evidence_required must be a boolean")
+    if set(raw) != {"holders"}:
+        raise ValueError(f"expected.json must have key {{holders}}, got {sorted(raw)}")
     raw_holders = raw["holders"]
     if not isinstance(raw_holders, list):
         raise TypeError("holders must be a list")
     holders = [_parse_holder(h) for h in raw_holders]
-    # The answer key must be unambiguous: each (person_name, position_name)
-    # pair appears at most once. A duplicate key is our bug — fail loudly
-    # rather than silently collapse it.
+    # The answer key must be unambiguous: each full holding observation
+    # appears at most once. A duplicate key is our bug — fail loudly.
     seen: set[tuple] = set()
     for holder in holders:
         key = _holder_key(holder)
         if key in seen:
-            raise ValueError(
-                f"duplicate (person_name, position_name) in expected.json: {key}"
-            )
+            raise ValueError(f"duplicate holding observation in expected.json: {key}")
         seen.add(key)
-    return evidence_required, holders
+    return holders
 
 
 def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
@@ -277,7 +205,7 @@ def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
 
     A fixture is a subdirectory (its name is the fixture id) containing
     ``page.html`` and ``expected.json`` (the full-schema answer key), plus an
-    optional ``screenshot.png``. Malformed keys or duplicate answer-key pairs
+    optional ``screenshot.png`` and ``url.txt``. Malformed or duplicate keys
     raise loudly. The answer key includes all explicit person-position
     relationships and omits names not tied to a stated position.
     """
@@ -285,14 +213,20 @@ def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
     for d in sorted(p for p in fixtures_dir.iterdir() if p.is_dir()):
         html = (d / "page.html").read_text(encoding="utf-8")
         data = json.loads((d / "expected.json").read_text(encoding="utf-8"))
-        evidence_required, holders = _parse_expected(data)
+        holders = _parse_expected(data)
+        url_file = d / "url.txt"
+        url = (
+            url_file.read_text(encoding="utf-8").strip()
+            if url_file.exists()
+            else f"https://fixtures.invalid/{d.name}/"
+        )
         shot = d / "screenshot.png"
         screenshot = shot.read_bytes() if shot.exists() else None
         fixtures.append(
             Fixture(
                 id=d.name,
                 html=html,
-                evidence_required=evidence_required,
+                url=url,
                 expected=holders,
                 screenshot=screenshot,
             )
@@ -308,16 +242,15 @@ def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
 def _index_actual(
     rows: list[dict],
 ) -> tuple[dict[tuple, dict], list[tuple]]:
-    """Index flattened holders by (person_name, position_name).
+    """Index flattened holders by their full observation key.
 
     Returns the index plus any duplicate keys the model emitted. Duplicates
-    are reported (never silently collapsed): the same pair emitted twice is a
-    model defect worth surfacing even though pair-set scoring counts it once.
+    are reported rather than silently collapsed.
     """
     actual: dict[tuple, dict] = {}
     duplicates: list[tuple] = []
     for row in rows:
-        key = (row[HOLDER_PERSON_NAME], row[HOLDER_POSITION_NAME])
+        key = tuple(row[name] for name in HOLDER_KEY_FIELDS)
         if key in actual:
             duplicates.append(key)
         else:
@@ -326,17 +259,11 @@ def _index_actual(
 
 
 # ===========================================================================
-# Per-holder field + evidence scoring
+# Per-holder field scoring
 # ===========================================================================
 
 
-def _normalize_ws(text: str) -> str:
-    return " ".join(text.split())
-
-
-def _field_mismatches(
-    expected_holder: dict[str, str | None], actual_row: dict
-) -> list[str]:
+def _field_mismatches(expected_holder: dict, actual_row: dict) -> list[str]:
     """Exact-compare every non-key scalar field; return a diagnostic per gap."""
     gaps: list[str] = []
     for name in HOLDER_FIELDS:
@@ -347,44 +274,15 @@ def _field_mismatches(
     return gaps
 
 
-def _evidence_status(
-    quotes: list[str], text: str, required: bool
-) -> tuple[int, list[str], bool]:
-    """Validate actual evidence quotes against the page plaintext.
-
-    Each quote must be a verbatim (whitespace-normalized, case-sensitive)
-    substring of the normalized page plaintext; a quote not on the page is
-    invalid. Returns ``(n_valid, invalid_quotes, ok)`` where ``ok`` is true
-    when no quote is invalid and, if evidence is required for this fixture,
-    at least one valid quote exists. Quote-span equality with an expected
-    string is *not* required — only that each quote actually appears on the
-    page.
-    """
-    valid = 0
-    invalid: list[str] = []
-    for quote in quotes:
-        if _normalize_ws(quote) in text:
-            valid += 1
-        else:
-            invalid.append(quote)
-    ok = not invalid and (not required or valid >= 1)
-    return valid, invalid, ok
-
-
 @dataclass
 class HolderDiag:
-    key: tuple[str | None, str | None]
+    key: tuple
     matched: bool
     field_mismatches: list[str] = field(default_factory=list)
-    n_valid_quotes: int = 0
-    invalid_quotes: list[str] = field(default_factory=list)
-    evidence_ok: bool = False
 
     @property
     def complete(self) -> bool:
-        # Complete = matched pair, every scalar field correct, and valid
-        # evidence (present when the fixture requires it, never fabricated).
-        return self.matched and not self.field_mismatches and self.evidence_ok
+        return self.matched and not self.field_mismatches
 
 
 @dataclass
@@ -413,7 +311,7 @@ class FixtureResult:
 
 
 def _score_fixture(
-    fx: Fixture, text: str, actual: dict[tuple, dict], duplicates: list[tuple]
+    fx: Fixture, actual: dict[tuple, dict], duplicates: list[tuple]
 ) -> FixtureResult:
     diags: list[HolderDiag] = []
     for holder in fx.expected:
@@ -421,19 +319,7 @@ def _score_fixture(
         if key in actual:
             row = actual[key]
             gaps = _field_mismatches(holder, row)
-            valid, invalid, ok = _evidence_status(
-                row[EVIDENCE_QUOTES], text, fx.evidence_required
-            )
-            diags.append(
-                HolderDiag(
-                    key=key,
-                    matched=True,
-                    field_mismatches=gaps,
-                    n_valid_quotes=valid,
-                    invalid_quotes=invalid,
-                    evidence_ok=ok,
-                )
-            )
+            diags.append(HolderDiag(key=key, matched=True, field_mismatches=gaps))
         else:
             diags.append(HolderDiag(key=key, matched=False))
     expected_keys = frozenset(d.key for d in diags)
@@ -446,8 +332,8 @@ def _score_fixture(
         diags=diags,
         expected_keys=expected_keys,
         actual_keys=actual_keys,
-        extra_keys=sorted(actual_keys - expected_keys),
-        duplicate_keys=sorted(set(duplicates)),
+        extra_keys=sorted(actual_keys - expected_keys, key=repr),
+        duplicate_keys=sorted(set(duplicates), key=repr),
     )
 
 
@@ -462,17 +348,11 @@ def _shape(fixture: Fixture) -> str:
     return "image" if fixture.screenshot is not None else "text"
 
 
-def _pair_label(key: tuple[str | None, str | None]) -> str:
-    person, position = key
-    return f"{person} ({position})"
-
-
-def _holder_evidence_note(d: HolderDiag, required: bool) -> str:
-    if d.invalid_quotes:
-        return f"{len(d.invalid_quotes)} invalid quote(s)"
-    if required and d.n_valid_quotes == 0:
-        return "missing required evidence"
-    return ""
+def _pair_label(key: tuple) -> str:
+    person, position, organization, start_date, end_date = key
+    details = [value for value in (organization, start_date, end_date) if value]
+    suffix = f" — {', '.join(details)}" if details else ""
+    return f"{person} ({position}){suffix}"
 
 
 def _fixture_notes(r: FixtureResult) -> str:
@@ -489,13 +369,9 @@ def _fixture_notes(r: FixtureResult) -> str:
     for d in r.diags:
         if not d.matched or d.complete:
             continue
-        bits: list[str] = []
-        if d.field_mismatches:
-            bits.append("fields [" + "; ".join(d.field_mismatches) + "]")
-        ev = _holder_evidence_note(d, r.fx.evidence_required)
-        if ev:
-            bits.append(ev)
-        notes.append(f"{_pair_label(d.key)}: " + ", ".join(bits))
+        notes.append(
+            f"{_pair_label(d.key)}: fields [" + "; ".join(d.field_mismatches) + "]"
+        )
     return ", ".join(notes)
 
 
@@ -507,14 +383,11 @@ def _print_holder_details(r: FixtureResult) -> None:
         if not d.matched:
             print(f"    - {_pair_label(d.key)}: MISSED", file=sys.stderr)
             continue
-        bits = ["incomplete"]
-        if d.field_mismatches:
-            bits.append("; ".join(d.field_mismatches))
-        ev = _holder_evidence_note(d, r.fx.evidence_required)
-        if ev:
-            bits.append(ev)
-        bits.append(f"{d.n_valid_quotes} valid quote(s)")
-        print(f"    - {_pair_label(d.key)}: " + " | ".join(bits), file=sys.stderr)
+        print(
+            f"    - {_pair_label(d.key)}: incomplete | "
+            + "; ".join(d.field_mismatches),
+            file=sys.stderr,
+        )
 
 
 def _print_table(results: list[FixtureResult], verbose: bool) -> None:
@@ -565,11 +438,11 @@ def _print_summary(results: list[FixtureResult]) -> None:
     print(f"{len(results)} fixture(s)", file=sys.stderr)
     print("                     precision   recall     F1", file=sys.stderr)
     print(
-        f"micro (pairs)      {micro_p:8.3f}  {micro_r:8.3f}  {micro_f1:8.3f}",
+        f"micro (holdings)   {micro_p:8.3f}  {micro_r:8.3f}  {micro_f1:8.3f}",
         file=sys.stderr,
     )
     print(
-        f"macro (pairs)      {macro_p:8.3f}  {macro_r:8.3f}  {macro_f1:8.3f}",
+        f"macro (holdings)   {macro_p:8.3f}  {macro_r:8.3f}  {macro_f1:8.3f}",
         file=sys.stderr,
     )
     print(f"                   (TP={tp} FP={fp} FN={fn})", file=sys.stderr)
@@ -593,10 +466,18 @@ def run(fixtures: list[Fixture], verbose: bool) -> None:
     results: list[FixtureResult] = []
     for fx in fixtures:
         text = html_to_text(fx.html)
-        extraction = extract(client, config.model, config.image, text, fx.screenshot)
+        metadata = metadata_from_html(fx.url, fx.html)
+        extraction = extract(
+            client,
+            config.model,
+            config.image,
+            metadata,
+            text,
+            fx.screenshot,
+        )
         rows = flatten_persons(extraction)
         actual, duplicates = _index_actual(rows)
-        result = _score_fixture(fx, text, actual, duplicates)
+        result = _score_fixture(fx, actual, duplicates)
         results.append(result)
 
         log.info(

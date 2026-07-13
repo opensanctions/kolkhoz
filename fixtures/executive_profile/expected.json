@@ -1,12 +1,12 @@
 {
-  "evidence_required": true,
   "holders": [
     {
       "person_name": "Søren Bjørk",
-      "position_name": "Chief Scientific Officer",
       "person_dob": null,
       "person_bio": "A molecular biologist by training, he previously held research posts at the University of Copenhagen and the Karolinska Institute before joining the company.",
-      "person_country": null,
+      "person_countries": [],
+      "position_name": "Chief Scientific Officer",
+      "position_organization": "Helix Biotech",
       "position_description": null,
       "position_jurisdiction": null,
       "position_start_date": "2019",

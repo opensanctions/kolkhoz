@@ -1,27 +1,27 @@
 {
   "holders": [
     {
-      "person_name": "Priya Nair",
+      "person_name": "Camille Dubois",
       "person_dob": null,
       "person_bio": null,
       "person_countries": [],
-      "position_name": "Chief Operating Officer",
-      "position_organization": "Atlas Holdings",
+      "position_name": "Ministre de la Culture",
+      "position_organization": "République française",
       "position_description": null,
       "position_jurisdiction": null,
-      "position_start_date": "2023",
+      "position_start_date": "15 janvier 2020",
       "position_end_date": null
     },
     {
-      "person_name": "Priya Nair",
+      "person_name": "田中 一郎",
       "person_dob": null,
       "person_bio": null,
       "person_countries": [],
-      "position_name": "Chief Financial Officer",
-      "position_organization": "Atlas Holdings",
+      "position_name": "文部科学大臣",
+      "position_organization": "日本国",
       "position_description": null,
       "position_jurisdiction": null,
-      "position_start_date": "2023",
+      "position_start_date": "2019年9月11日",
       "position_end_date": null
     }
   ]

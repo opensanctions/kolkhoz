@@ -20,7 +20,12 @@ from sqlalchemy.orm import Session
 from kolkhoz.capture import is_blank, latest_snapshot, run_snapshot_csv
 from kolkhoz.config import load_config
 from kolkhoz.db import init_engine
-from kolkhoz.extract import extract, flatten_persons, screenshot_reason
+from kolkhoz.extract import (
+    extract,
+    flatten_persons,
+    metadata_from_html,
+    screenshot_reason,
+)
 from kolkhoz.models import Extraction as ExtractionRow
 from kolkhoz.models import Holder as HolderRow
 from kolkhoz.models import Page as PageRow
@@ -129,8 +134,14 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                     blob = Path(prefix, snapshot["screenshot"]).read_bytes()
                     if not is_blank(blob):
                         screenshot_blob = blob
+            metadata = metadata_from_html(snapshot["url"], html)
             extraction = extract(
-                client, config.model, config.image, text, screenshot_blob
+                client,
+                config.model,
+                config.image,
+                metadata,
+                text,
+                screenshot_blob,
             )
             holders = flatten_persons(extraction)
             log.info("%s → %d holder(s)", snapshot["url"], len(holders))
@@ -157,7 +168,8 @@ def extract_cmd(dataset: str | None, sample: int | None) -> None:
                         position_name=h["position_name"],
                         person_dob=h["person_dob"],
                         person_bio=h["person_bio"],
-                        person_country=h["person_country"],
+                        person_countries=h["person_countries"],
+                        position_organization=h["position_organization"],
                         position_description=h["position_description"],
                         position_jurisdiction=h["position_jurisdiction"],
                         position_start_date=h["position_start_date"],

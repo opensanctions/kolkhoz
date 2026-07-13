@@ -18,7 +18,7 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 kolkhoz.py         # the CLI: snapshot, extract, export
 models.py          # SQLAlchemy domain (Page, Extraction, Holder)
 evaluate.py        # score the extraction pipeline against synthetic fixtures
-fixtures/          # JSON synthetic pages (org, holders, distractor HTML) for evaluate.py
+fixtures/          # one directory per fixture: page.html, expected.json, optional screenshot.png
 ```
 
 `input/` (gitignored) holds the input CSVs (one dataset per file). `output/`
@@ -46,9 +46,10 @@ uv run python some_script.py
 
 ## Evaluation
 
-Score the extraction pipeline against hand-authored synthetic fixtures in
-`evaluate.py`. Each fixture is an authored page with a known set of holders;
-the harness renders it to HTML, derives the plaintext, runs the real
+Score the extraction pipeline against hand-authored fixture pages. Each
+fixture is a directory under `fixtures/` holding `page.html`, an
+`expected.json` answer key, and an optional `screenshot.png` that drives the
+image path. The harness derives the plaintext the model reads, runs the real
 `extract()`, and scores the returned (human, position) pairs by exact string
 equality.
 

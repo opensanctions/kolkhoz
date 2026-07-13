@@ -1,46 +1,42 @@
-"""Score the extraction pipeline against hand-authored synthetic fixtures.
+"""Score the extraction pipeline against hand-authored fixture pages.
 
 The pipeline is meant to read holders *verbatim* from a page — names, titles,
 dates copied as written. Scoring it against a third-party golden set does not
 work: those sets come from scrapers that have already normalized (title-cased
 names, expanded role codes, merged variants), so a faithful verbatim
 extraction fails while a normalized guess passes. Here we own both ends
-instead: each fixture is an authored page whose holders we know exactly. The
-harness renders it to HTML, derives the plaintext the model reads, runs the
-real ``kolkhoz.extract``, and scores the returned (person, position) pairs
-against what we put in. Exact-match is honest again.
+instead: each fixture is an authored HTML page whose holders we know exactly.
+The harness derives the plaintext the model reads (the same derivation the
+live pipeline applies to Pravda's captured HTML), runs the real
+``kolkhoz.extract``, and scores the returned (person, position) pairs against
+the answer key. Exact-match is honest again.
 
-Fixtures live as JSON in ``fixtures/`` (one file per page: an organization, two lists of holders (text and
-screenshot), and optional distractor HTML). The filename stem is the
-fixture id. Every fixture renders through the same single layout — a roster
-table of its holders — so the only thing that varies between cases is the
-data, not the chrome.
+Fixtures live as directories under ``fixtures/`` — one per page, named after
+the fixture id. Each directory holds:
 
-Scope is deliberately narrow:
-
-- **Two holder lists per fixture, no mode switch.** Each fixture declares
-  ``text_holders`` (rendered to the plaintext the model reads) and
-  ``screenshot_holders`` (rasterized to a roster PNG, attached iff non-empty).
-  The answer key is the union of both. The three pipeline paths fall out of
-  how the two are populated: text-only; screenshot-only (thin text, the
-  "thin text" trigger); or both with ``text_holders`` a subset of
-  ``screenshot_holders`` (text/screenshot overlap — the "image-dense"
-  trigger, where the model must neither double-count the shared names nor
-  miss the pixel-only ones). Both screenshot triggers mirror real branches
-  of ``kolkhoz.screenshot_reason``.
-
-- **(person, position) pairs only**, scored per fixture by exact string
-  equality. Richer fields (dob, bio, dates) can be added once fixtures carry
-  them.
-
-- **Hand-authored fixtures.** Each is a deliberate, legible case that probes
-  one behavior: clean recall, distractor precision, verbatim preservation of
-  non-ASCII names, hallucination resistance on a holder-free page, one person
-  holding two titles, and roster completeness at scale.
+- ``page.html``      the page itself, authored in whatever shape the case
+                     needs (a roster table, a prose bio, a news lead, ...).
+                     Variety is the point: real failure modes live in the
+                     layout, so fixtures differ in structure on purpose.
+- ``expected.json``  the answer key: a list of ``{"person", "position"}``
+                     objects for every holder the page states. Every name on
+                     the page that is *not* here is, by construction, a
+                     distractor the pipeline must exclude — founders, former
+                     holders, donors, contacts, honorees. A non-holder needs
+                     no separate declaration: it is just a name in the HTML
+                     absent from the key.
+- ``screenshot.png`` optional. When present it is tiled and attached as the
+                     page screenshot, driving the image path. It is a browser
+                     capture of ``page.html``, so the names appear in *both*
+                     the derived text and the image: this exercises the image
+                     path and cross-channel consistency (no double-counting),
+                     not the "thin text, names only in pixels" case. To probe
+                     that case the pixel-only names would have to live inside
+                     real ``<img>`` elements rather than page text.
 
 The harness calls the real model via ``kolkhoz.extract`` (it spends tokens and
 reads ``.env``) and is fully decoupled from Pravda and the database: no
-snapshots, no Pages, no Extractions on disk — just render, extract, score.
+snapshots, no Pages, no Extractions on disk — just read, extract, score.
 
 Usage:
 
@@ -48,17 +44,14 @@ Usage:
     uv run python evaluate.py -v # per-fixture detail
 """
 
-import io
 import json
 import logging
 import sys
-from html import escape
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 from bs4 import BeautifulSoup
-from PIL import Image, ImageDraw, ImageFont
-from pydantic import BaseModel, Field
 
 from kolkhoz import extract
 
@@ -66,173 +59,44 @@ log = logging.getLogger("evaluate")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
-# Vendored TrueType for the synthetic screenshot renderer. Pillow's bundled
-# default font lacks Latin-Extended glyphs (tofu for names like Dvořák / João /
-# Wójcik), so we ship DejaVu Sans (permissive Bitstream-Vera-derived license;
-# see assets/LICENSE), which covers the full range the fixtures use.
-FONT_PATH = Path(__file__).parent / "assets" / "DejaVuSans.ttf"
-
 
 # ===========================================================================
-# Schema — the authored ground truth, loaded from JSON
+# Schema — a fixture directory on disk
 # ===========================================================================
 
 
-class SyntheticHolder(BaseModel):
-    """A single (person, position) pair the page states and we expect back."""
+@dataclass
+class Fixture:
+    """One authored page on disk: its HTML, the holders we expect, and an
+    optional browser screenshot that drives the image path.
 
-    person_name: str
-    position_name: str
-
-
-class SyntheticPage(BaseModel):
-    """One authored page: the org, the holders named in each channel, and any
-    distractor HTML that must *not* be extracted.
-
-    ``id`` is the JSON filename stem (the file *is* the fixture).
-    ``text_holders`` is rendered to HTML → the plaintext the model reads;
-    ``screenshot_holders`` is rasterized to a PNG, attached iff non-empty. The
-    answer key is the union of both — everyone the page states in either
-    channel. ``extra_html`` is distractor noise. No mode switch: the pipeline
-    path falls out of whether ``screenshot_holders`` is empty.
+    ``html`` is the page body; the model reads the plaintext derived from it
+    (same derivation the live pipeline applies to Pravda's captured HTML).
+    ``expected`` is the answer key. ``screenshot`` is attached iff
+    ``screenshot.png`` sits beside the HTML.
     """
 
     id: str
-    organization: str
-    text_holders: list[SyntheticHolder] = Field(default_factory=list)
-    screenshot_holders: list[SyntheticHolder] = Field(default_factory=list)
-    extra_html: str = ""
+    html: str
+    expected: set[tuple[str, str]]
+    screenshot: bytes | None
 
 
 # ===========================================================================
-# Rendering — one layout (a roster table) → HTML → plaintext
+# Text derivation — HTML → the plaintext the model reads
 # ===========================================================================
-
-
-def render_html(page: SyntheticPage) -> str:
-    """Render ``text_holders`` to standalone HTML through one roster layout
-    (a Name/Position table, or just the header when empty). The model reads
-    the derived plaintext, so only the data varies between fixtures.
-    """
-    parts = [
-        "<!DOCTYPE html>",
-        "<html><head><meta charset='utf-8'>",
-        f"<title>{escape(page.organization)}</title></head><body>",
-        f"<h1>{escape(page.organization)}</h1>",
-    ]
-    if page.text_holders:
-        parts.append(
-            "<table><thead><tr><th>Name</th><th>Position</th></tr></thead><tbody>"
-        )
-        for h in page.text_holders:
-            parts.append(
-                f"<tr><td>{escape(h.person_name)}</td><td>{escape(h.position_name)}</td></tr>"
-            )
-        parts.append("</tbody></table>")
-    if page.extra_html:
-        parts.append(page.extra_html)
-    parts.append("</body></html>")
-    return "".join(parts)
 
 
 def html_to_text(html: str) -> str:
-    """Derive the plaintext the model reads from rendered HTML.
+    """Derive the plaintext the model reads from the page HTML.
 
     ``get_text`` is a ``textContent``-style walk — it returns all text in the
     DOM regardless of CSS, unlike ``inner_text`` which drops anything not
-    visibly rendered (opensanctions/pravda#14).
+    visibly rendered (opensanctions/pravda#14). This is the same derivation
+    the live pipeline applies to Pravda's captured HTML.
     """
     soup = BeautifulSoup(html, "html.parser")
     return " ".join(soup.get_text(separator=" ").split())
-
-
-def render_screenshot(page: SyntheticPage) -> bytes:
-    """Rasterize ``screenshot_holders`` to a roster PNG.
-
-    A mini-renderer for the one roster layout — not a general HTML engine. Two
-    passes: measure to size the canvas, then draw. Page-driven (not
-    HTML-driven) so the screenshot can show the full roster regardless of what
-    ``text_holders`` the text channel carries. Drives the image path of the
-    pipeline without a headless browser.
-    """
-    font = ImageFont.truetype(str(FONT_PATH), 24)
-    head_font = ImageFont.truetype(str(FONT_PATH), 32)
-    margin = 40
-    width = 1000
-    gap = 14
-
-    def textw(text: str, f: ImageFont.ImageFont) -> int:
-        return int(f.getlength(text))
-
-    def line_height(f: ImageFont.ImageFont) -> int:
-        return f.getbbox("Ag")[3] + gap
-
-    def wrap(text: str, f: ImageFont.ImageFont, max_w: int) -> list[str]:
-        words, out, cur = text.split(), [], ""
-        for w in words:
-            trial = w if not cur else cur + " " + w
-            if textw(trial, f) <= max_w:
-                cur = trial
-            elif cur:
-                out.append(cur)
-                cur = w
-            else:
-                out.append(w)
-                cur = ""
-        if cur:
-            out.append(cur)
-        return out or [""]
-
-    # Drawn from screenshot_holders (not the rendered HTML), so the screenshot
-    # can carry the full roster regardless of text_holders.
-    head = page.organization
-    rows = [(h.person_name, h.position_name) for h in page.screenshot_holders]
-    distractors: list[str] = []
-    if page.extra_html:
-        extra = BeautifulSoup(page.extra_html, "html.parser")
-        for child in extra.children:
-            txt = child.get_text(separator=" ", strip=True)
-            if txt:
-                distractors.append(txt)
-
-    # Pass 1: lay out (text, x, font, y) ops against a running y cursor.
-    ops: list[tuple[str, int, ImageFont.ImageFont, int]] = []
-    y = margin
-    h_lh = line_height(head_font)
-    f_lh = line_height(font)
-    if head:
-        ops.append((head, margin, head_font, y))
-        y += h_lh + gap
-    if rows:
-        name_w = max(textw(name, font) for name, _ in rows)
-        pos_x = margin + name_w + 60
-        ops.append(("Name", margin, font, y))
-        ops.append(("Position", pos_x, font, y))
-        y += f_lh
-        for name, pos in rows:
-            ops.append((name, margin, font, y))
-            ops.append((pos, pos_x, font, y))
-            y += f_lh
-        y += gap
-    content_w = width - 2 * margin
-    for d in distractors:
-        for ln in wrap(d, font, content_w):
-            ops.append((ln, margin, font, y))
-            y += f_lh
-        y += gap
-
-    if ops:
-        last_text, _, last_font, last_y = ops[-1]
-        height = last_y + last_font.getbbox(last_text)[3] + margin
-    else:
-        height = margin * 2
-    img = Image.new("RGB", (width, max(height, 120)), "white")
-    draw = ImageDraw.Draw(img)
-    for text, x, f, ty in ops:  # pass 2: draw
-        draw.text((x, ty), text, fill="black", font=f)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
 
 
 # ===========================================================================
@@ -279,13 +143,25 @@ def page_prf(
 # ===========================================================================
 
 
-def load_fixtures(fixtures_dir: Path) -> list[SyntheticPage]:
-    """Load every ``*.json`` in ``fixtures_dir``, id = filename stem."""
-    pages: list[SyntheticPage] = []
-    for path in sorted(fixtures_dir.glob("*.json")):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        pages.append(SyntheticPage(id=path.stem, **data))
-    return pages
+def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
+    """Load every fixture directory under ``fixtures_dir``.
+
+    A fixture is a subdirectory (its name is the fixture id) containing
+    ``page.html`` and ``expected.json`` — a list of ``{person, position}``
+    objects — plus an optional ``screenshot.png``. Missing keys raise loudly;
+    names in the HTML absent from the key are distractors by construction.
+    """
+    fixtures: list[Fixture] = []
+    for d in sorted(p for p in fixtures_dir.iterdir() if p.is_dir()):
+        html = (d / "page.html").read_text(encoding="utf-8")
+        data = json.loads((d / "expected.json").read_text(encoding="utf-8"))
+        expected = {(h["person"], h["position"]) for h in data}
+        shot = d / "screenshot.png"
+        screenshot = shot.read_bytes() if shot.exists() else None
+        fixtures.append(
+            Fixture(id=d.name, html=html, expected=expected, screenshot=screenshot)
+        )
+    return fixtures
 
 
 # ===========================================================================
@@ -293,41 +169,30 @@ def load_fixtures(fixtures_dir: Path) -> list[SyntheticPage]:
 # ===========================================================================
 
 
-def _shape(page: SyntheticPage) -> str:
-    """Table label for which pipeline path a fixture drives, derived from the
-    two holder lists (not stored): text / image / partial."""
-    if not page.screenshot_holders:
-        return "text"
-    if not page.text_holders:
-        return "image"
-    return "partial"
+def _shape(fixture: Fixture) -> str:
+    """Table label for the pipeline path a fixture drives: the image path
+    when a screenshot is attached, the text path otherwise."""
+    return "image" if fixture.screenshot is not None else "text"
 
 
-def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
-    """Render → extract → score each fixture, then print a summary table."""
-    rows: list[tuple[SyntheticPage, set, set, int, int, int]] = []
-    for page in fixtures:
-        # Text always carries text_holders (empty = thin text); the screenshot
-        # is attached iff screenshot_holders is non-empty. The two lists cover
-        # every path with no mode switch.
-        text = html_to_text(render_html(page))
-        screenshot_blob = render_screenshot(page) if page.screenshot_holders else None
-        extraction = extract(text, screenshot_blob)
+def run(fixtures: list[Fixture], verbose: bool) -> None:
+    """Derive text → extract → score each fixture, then print a summary table."""
+    rows: list[tuple[Fixture, set, set, int, int, int]] = []
+    for fx in fixtures:
+        text = html_to_text(fx.html)
+        extraction = extract(text, fx.screenshot)
 
-        expected = {(h.person_name, h.position_name) for h in page.text_holders} | {
-            (h.person_name, h.position_name) for h in page.screenshot_holders
-        }
         got = {
             (person.name, position.name)
             for person in extraction.persons
             for position in person.positions
         }
-        tp, fp, fn = score_page(expected, got)
-        rows.append((page, expected, got, tp, fp, fn))
+        tp, fp, fn = score_page(fx.expected, got)
+        rows.append((fx, fx.expected, got, tp, fp, fn))
 
         log.info(
             "%s: %d holder(s)",
-            page.id,
+            fx.id,
             sum(len(p.positions) for p in extraction.persons),
         )
 
@@ -338,7 +203,7 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
         file=sys.stderr,
     )
     print("-" * 90, file=sys.stderr)
-    for page, expected, got, tp, fp, fn in rows:
+    for fx, expected, got, tp, fp, fn in rows:
         notes: list[str] = []
         if fp:
             notes.append(
@@ -353,7 +218,7 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
                 "expected: " + "; ".join(f"{h} ({p})" for h, p in sorted(expected))
             )
         print(
-            f"{page.id:20} {_shape(page):10} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
+            f"{fx.id:20} {_shape(fx):10} {tp:3d} {fp:3d} {fn:3d}  {', '.join(notes)}",
             file=sys.stderr,
         )
 
@@ -401,7 +266,7 @@ def run(fixtures: list[SyntheticPage], verbose: bool) -> None:
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     default=str(FIXTURES_DIR),
     show_default=True,
-    help="Directory of fixture JSON files.",
+    help="Directory of fixture subdirectories.",
 )
 def cli(verbose: bool, fixtures_dir: Path) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)

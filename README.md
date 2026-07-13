@@ -46,7 +46,7 @@ uv run python kolkhoz.py export
 
 ## Evaluation
 
-Score the extraction pipeline against hand-authored synthetic fixtures in `evaluate.py`. Each fixture is an authored page with a known set of holders; the harness renders it to HTML, derives the plaintext, runs the real `extract()`, and scores the returned (human, position) pairs by exact string equality.
+Score the extraction pipeline against hand-authored fixture pages. Each fixture is a directory under `fixtures/` holding `page.html`, an `expected.json` answer key, and an optional `screenshot.png` that drives the image path. The harness derives the plaintext the model reads, runs the real `extract()`, and scores the returned (human, position) pairs by exact string equality. See `evaluate.py`'s docstring for the fixture layout.
 
 ```bash
 uv run python evaluate.py   # run all fixtures

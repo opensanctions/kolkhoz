@@ -1,0 +1,14 @@
+[
+  {"person": "Kwame Mensah", "position": "President"},
+  {"person": "Ingrid Lindqvist", "position": "Vice President"},
+  {"person": "Yusuf Demir", "position": "Secretary-General"},
+  {"person": "Mei-Lin Chen", "position": "Treasurer"},
+  {"person": "Carlos Mendoza", "position": "Director"},
+  {"person": "Ngozi Okonkwo", "position": "Director"},
+  {"person": "Pavel Novák", "position": "Director"},
+  {"person": "Amara Singh", "position": "Director"},
+  {"person": "João Silva", "position": "Regional Chair, North"},
+  {"person": "Astrid Berg", "position": "Regional Chair, South"},
+  {"person": "Rashid Karim", "position": "Regional Chair, East"},
+  {"person": "Bianca Rossi", "position": "Regional Chair, West"}
+]

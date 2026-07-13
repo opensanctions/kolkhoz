@@ -86,7 +86,10 @@ there are no valid relationships, return an empty persons list.
    heading such as "Leadership" into "Leader". Never expand abbreviations,
    translate titles, or otherwise rewrite them.
 5. A page-level organisation explicitly scopes positions listed beneath it.
-   The URL alone does not establish an organisation.
+   The URL alone does not establish an organisation. If metadata and body text
+   conflict, prefer the more specific body statement over generic or stale
+   metadata. Preserve both relationships only when the source clearly asserts
+   that they are distinct holdings.
 6. A geographic area embedded in a title may also populate jurisdiction, but
    do not remove it from the title. For example, preserve the full position
    name "Regional Chair, North" and also set jurisdiction to "North".

@@ -24,7 +24,7 @@ uv sync
 
 ## Usage
 
-All commands run through a single `kolkhoz.py` CLI. Input and output
+All commands run through the `kolkhoz` console script (installed by `uv sync`). Input and output
 locations are fsspec URLs set via `INPUT_BASE_PATH` and `OUTPUT_BASE_PATH`
 in `.env` (a local dir or a `gs://`/`s3://` bucket prefix):
 
@@ -32,16 +32,16 @@ in `.env` (a local dir or a `gs://`/`s3://` bucket prefix):
 # Snapshot all URLs from every CSV in the input directory (INPUT_BASE_PATH)
 # through Pravda, recording pages in the DB. Each CSV is its own dataset,
 # named after the file's stem.
-uv run python kolkhoz.py snapshot
+uv run kolkhoz snapshot
 
 # Extract position holders from the latest snapshot of each page in the DB
-uv run python kolkhoz.py extract
-uv run python kolkhoz.py extract -d hio_leadership   # one dataset only
-uv run python kolkhoz.py extract -n 20               # random sample of 20
+uv run kolkhoz extract
+uv run kolkhoz extract -d hio_leadership   # one dataset only
+uv run kolkhoz extract -n 20               # random sample of 20
 
 # Export extracted holders as JSONL, one file per dataset under
 # <OUTPUT_BASE_PATH>/<dataset>/<date>.jsonl
-uv run python kolkhoz.py export
+uv run kolkhoz export
 ```
 
 ## Evaluation

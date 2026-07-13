@@ -53,7 +53,10 @@ from pathlib import Path
 import click
 from bs4 import BeautifulSoup
 
-from kolkhoz import extract
+from openai import OpenAI
+
+from kolkhoz.config import load_config
+from kolkhoz.extract import extract
 
 log = logging.getLogger("evaluate")
 
@@ -177,10 +180,12 @@ def _shape(fixture: Fixture) -> str:
 
 def run(fixtures: list[Fixture], verbose: bool) -> None:
     """Derive text → extract → score each fixture, then print a summary table."""
+    config = load_config()
+    client = OpenAI()
     rows: list[tuple[Fixture, set, set, int, int, int]] = []
     for fx in fixtures:
         text = html_to_text(fx.html)
-        extraction = extract(text, fx.screenshot)
+        extraction = extract(client, config.model, config.image, text, fx.screenshot)
 
         got = {
             (person.name, position.name)

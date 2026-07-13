@@ -9,7 +9,7 @@
       "person_country": null,
       "position_description": null,
       "position_jurisdiction": null,
-      "position_start_date": null,
+      "position_start_date": "2023",
       "position_end_date": null
     },
     {
@@ -20,7 +20,7 @@
       "person_country": null,
       "position_description": null,
       "position_jurisdiction": null,
-      "position_start_date": null,
+      "position_start_date": "2023",
       "position_end_date": null
     }
   ]

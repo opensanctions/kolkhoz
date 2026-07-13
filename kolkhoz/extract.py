@@ -36,42 +36,51 @@ MAX_IMG_DENSITY = 0.1
 _INSTRUCTIONS_HEAD = """\
 # Role
 
-You extract political position holders from the content of a single web page
-and return structured data only.
+You extract stated person-position relationships from the content of a single
+web page and return structured data only. Extract what the source says; do not
+decide whether a position is politically relevant or useful downstream.
 
 # Definitions
 
-- A holder is a named human whom the page ties to a named position — an
-  office, seat, title, or role — at the organisation the page is about.
+- A holder is a named human whom the page explicitly ties to a named position:
+  an office, seat, title, role, or membership.
+- Include every explicit person-position relationship, whether current,
+  former, honorary, incidental, or stated in contact information. Relevance
+  and selection are not part of extraction.
 - A person can hold several positions; list each as a separate entry under
   that person. The person's own facts (date of birth, biography, country)
   are stated once on the person, not repeated per position.
-- The page must tie the person to a position. A name on its own is not a
-  holder.
+- A name, action, or personal relationship on its own is not a position. Do
+  not turn source wording such as "founded by", "married to", or "spoke at"
+  into invented titles such as "Founder", "Spouse", or "Speaker".
 
 # Goal and success
 
-Return one person record per holder, with every position they hold and the
-facts the page states. The result is correct when every holder is captured
-once, every non-holder is excluded, and nothing is invented. If the page
-names no holder, return an empty persons list.
+Return one person record per holder, with every explicitly stated position and
+all facts the page states. The result is correct when every stated
+person-position relationship is captured once and nothing is invented. If the
+page states none, return an empty persons list.
 
 # How to work
 
 For each position, first find the verbatim phrase on the page that ties the
 person to the role. Put that phrase in evidence_quotes, then fill the other
 fields only from what the page states. Every field must trace to text that is
-actually on the page.
+actually on the page. Repeated mentions are supporting evidence, not separate
+positions: emit the same person-position relationship only once.
 
 # Constraints
 
 - Only extract humans the page names. Never invent a person or a position.
-- Copy names, countries, and dates exactly as written (e.g. "3 May 2022").
-  Never normalize, expand, translate, or reformat.
+- Copy names, position titles, countries, and dates exactly as written (e.g.
+  "3 May 2022"). Never normalize, singularize, expand, translate, or reformat.
 - Leave a field null, and evidence_quotes empty, when the page does not state
   it. Never infer a value from context or fill it from world knowledge.
-- person.country is the person's country; position.jurisdiction is the place
-  the office covers. Use only what the page states; null otherwise.
+- person.country is the person's country; position.jurisdiction is an
+  explicitly stated geographic area the position covers. An organisation or
+  employer is not a jurisdiction; null unless the source states the area.
+- position.description is a stated mandate, remit, or set of responsibilities.
+  A title, employer, date, or circumstance of departure is not a description.
 """
 
 _INSTRUCTIONS_WITH_SCREENSHOT = """\
@@ -102,16 +111,25 @@ class Position(BaseModel):
     name: str | None = Field(
         default=None,
         description=(
-            "Name of the position the person holds, e.g. 'Council Member'. Use "
-            "the most specific title shown on the page. Null only if the page "
-            "names the person but states no title."
+            "Name of the position the person holds, e.g. 'Council Member'. Copy "
+            "the most specific title exactly as shown; do not normalize or "
+            "singularize it. Null only if the page names the person but states "
+            "no title."
         ),
     )
     description: str | None = Field(
-        default=None, description="Description of the position as stated on the page."
+        default=None,
+        description=(
+            "Responsibilities, mandate, or remit of the position as stated on the "
+            "page; not its title, employer, dates, or circumstances of departure."
+        ),
     )
     jurisdiction: str | None = Field(
-        default=None, description="Place the position covers, as written on the page."
+        default=None,
+        description=(
+            "Explicitly stated geographic area the position covers, as written on "
+            "the page. An organisation or employer is not a jurisdiction."
+        ),
     )
     start_date: str | None = Field(
         default=None, description="When the person started, as written on the page."

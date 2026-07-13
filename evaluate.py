@@ -57,10 +57,13 @@ The answer key is an object::
   explicit, including nulls. ``person_name`` and ``position_name`` are the
   match key; the other seven are compared field by field on matched holders.
 
-Every name on the page that is *not* in ``holders`` is, by construction, a
-distractor the pipeline must exclude — founders, former holders, donors,
-contacts, honorees. A non-holder needs no separate declaration: it is just a
-name in the HTML absent from the key.
+The answer key covers every named human whom the page explicitly ties to a
+named position, without judging whether that position is relevant downstream.
+Current, former, honorary, incidental, and contact roles all belong in the
+key. A name tied only to an action or personal relationship does not: for
+example, ``founded by Jane Doe`` does not state that Jane held a position named
+``Founder``. Names without explicit positions need no separate declaration;
+they are simply absent from ``holders``.
 
 Scoring has four layers:
 
@@ -275,8 +278,8 @@ def load_fixtures(fixtures_dir: Path) -> list[Fixture]:
     A fixture is a subdirectory (its name is the fixture id) containing
     ``page.html`` and ``expected.json`` (the full-schema answer key), plus an
     optional ``screenshot.png``. Malformed keys or duplicate answer-key pairs
-    raise loudly; names in the HTML absent from the key are distractors by
-    construction.
+    raise loudly. The answer key includes all explicit person-position
+    relationships and omits names not tied to a stated position.
     """
     fixtures: list[Fixture] = []
     for d in sorted(p for p in fixtures_dir.iterdir() if p.is_dir()):

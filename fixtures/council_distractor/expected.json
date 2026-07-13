@@ -44,6 +44,17 @@
       "position_jurisdiction": null,
       "position_start_date": "2016",
       "position_end_date": "2022"
+    },
+    {
+      "person_name": "Robert Pine",
+      "position_name": "City Registrar",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
     }
   ]
 }

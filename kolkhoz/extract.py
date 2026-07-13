@@ -41,13 +41,13 @@ and return structured data only.
 
 # Definitions
 
-- A holder is a named human who holds a named position — an office, seat,
-  title, or role — at the organisation the page is about.
+- A holder is a named human whom the page ties to a named position — an
+  office, seat, title, or role — at the organisation the page is about.
 - A person can hold several positions; list each as a separate entry under
   that person. The person's own facts (date of birth, biography, country)
   are stated once on the person, not repeated per position.
-- Not holders: authors, contacts, and anyone merely mentioned. A name
-  on the page is not enough — the person must hold a position there.
+- The page must tie the person to a position. A name on its own is not a
+  holder.
 
 # Goal and success
 
@@ -143,7 +143,7 @@ class Person(BaseModel):
 class Extraction(BaseModel):
     persons: list[Person] = Field(
         default_factory=list,
-        description="Current position holders on the page. Empty list if none.",
+        description="Position holders stated on the page. Empty list if none.",
     )
 
 

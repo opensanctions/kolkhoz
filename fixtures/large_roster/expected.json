@@ -1,14 +1,137 @@
-[
-  {"person": "Kwame Mensah", "position": "President"},
-  {"person": "Ingrid Lindqvist", "position": "Vice President"},
-  {"person": "Yusuf Demir", "position": "Secretary-General"},
-  {"person": "Mei-Lin Chen", "position": "Treasurer"},
-  {"person": "Carlos Mendoza", "position": "Director"},
-  {"person": "Ngozi Okonkwo", "position": "Director"},
-  {"person": "Pavel Novák", "position": "Director"},
-  {"person": "Amara Singh", "position": "Director"},
-  {"person": "João Silva", "position": "Regional Chair, North"},
-  {"person": "Astrid Berg", "position": "Regional Chair, South"},
-  {"person": "Rashid Karim", "position": "Regional Chair, East"},
-  {"person": "Bianca Rossi", "position": "Regional Chair, West"}
-]
+{
+  "evidence_required": false,
+  "holders": [
+    {
+      "person_name": "Kwame Mensah",
+      "position_name": "President",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Ingrid Lindqvist",
+      "position_name": "Vice President",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Yusuf Demir",
+      "position_name": "Secretary-General",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Mei-Lin Chen",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Carlos Mendoza",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Ngozi Okonkwo",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Pavel Novák",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Amara Singh",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "João Silva",
+      "position_name": "Regional Chair, North",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Astrid Berg",
+      "position_name": "Regional Chair, South",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Rashid Karim",
+      "position_name": "Regional Chair, East",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Bianca Rossi",
+      "position_name": "Regional Chair, West",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    }
+  ]
+}

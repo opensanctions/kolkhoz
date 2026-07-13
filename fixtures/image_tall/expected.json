@@ -1,194 +1,533 @@
-[
-  {
-    "person": "Artur Novák",
-    "position": "Director"
-  },
-  {
-    "person": "Bridget Obermann",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Caleb Petrova",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Diana Quist",
-    "position": "Secretary"
-  },
-  {
-    "person": "Esko Rahman",
-    "position": "Board Member"
-  },
-  {
-    "person": "Fatima Silva",
-    "position": "Director"
-  },
-  {
-    "person": "Gunnar Tanaka",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Hera Ulrich",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Ivan Vance",
-    "position": "Secretary"
-  },
-  {
-    "person": "Julia Wójcik",
-    "position": "Board Member"
-  },
-  {
-    "person": "Kofi Xu",
-    "position": "Director"
-  },
-  {
-    "person": "Lena Yamamoto",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Mateo Zayed",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Nia Andersson",
-    "position": "Secretary"
-  },
-  {
-    "person": "Otto Berg",
-    "position": "Board Member"
-  },
-  {
-    "person": "Priya Costa",
-    "position": "Director"
-  },
-  {
-    "person": "Quentin Dvořák",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Rosa Eriksson",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Sven Ferreira",
-    "position": "Secretary"
-  },
-  {
-    "person": "Tatiana Gupta",
-    "position": "Board Member"
-  },
-  {
-    "person": "Umar Hansen",
-    "position": "Director"
-  },
-  {
-    "person": "Vera Ibrahim",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Wen Jensen",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Xander Kowalski",
-    "position": "Secretary"
-  },
-  {
-    "person": "Yara Lindqvist",
-    "position": "Board Member"
-  },
-  {
-    "person": "Zane Marchetti",
-    "position": "Director"
-  },
-  {
-    "person": "Amara Nilsen",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Boris Okafor",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Chandra Papadopoulos",
-    "position": "Secretary"
-  },
-  {
-    "person": "Diego Quinn",
-    "position": "Board Member"
-  },
-  {
-    "person": "Ewa Rossi",
-    "position": "Director"
-  },
-  {
-    "person": "Farouk Singh",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Gita Thompson",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Henrik Ueda",
-    "position": "Secretary"
-  },
-  {
-    "person": "Ines Vasquez",
-    "position": "Board Member"
-  },
-  {
-    "person": "Joon Weiss",
-    "position": "Director"
-  },
-  {
-    "person": "Karla Xiao",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Liam Yousaf",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Maya Zhang",
-    "position": "Secretary"
-  },
-  {
-    "person": "Niko Álvarez",
-    "position": "Board Member"
-  },
-  {
-    "person": "Oksana Bjørn",
-    "position": "Director"
-  },
-  {
-    "person": "Paolo Costa",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Quan Dvořák",
-    "position": "Treasurer"
-  },
-  {
-    "person": "Ravi Eriksson",
-    "position": "Secretary"
-  },
-  {
-    "person": "Sasha Ferreira",
-    "position": "Board Member"
-  },
-  {
-    "person": "Tomas Gupta",
-    "position": "Director"
-  },
-  {
-    "person": "Uma Hansen",
-    "position": "Deputy Director"
-  },
-  {
-    "person": "Vito Ibrahim",
-    "position": "Treasurer"
-  }
-]
+{
+  "evidence_required": false,
+  "holders": [
+    {
+      "person_name": "Artur Novák",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Bridget Obermann",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Caleb Petrova",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Diana Quist",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Esko Rahman",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Fatima Silva",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Gunnar Tanaka",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Hera Ulrich",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Ivan Vance",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Julia Wójcik",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Kofi Xu",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Lena Yamamoto",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Mateo Zayed",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Nia Andersson",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Otto Berg",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Priya Costa",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Quentin Dvořák",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Rosa Eriksson",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Sven Ferreira",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Tatiana Gupta",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Umar Hansen",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Vera Ibrahim",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Wen Jensen",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Xander Kowalski",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Yara Lindqvist",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Zane Marchetti",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Amara Nilsen",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Boris Okafor",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Chandra Papadopoulos",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Diego Quinn",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Ewa Rossi",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Farouk Singh",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Gita Thompson",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Henrik Ueda",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Ines Vasquez",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Joon Weiss",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Karla Xiao",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Liam Yousaf",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Maya Zhang",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Niko Álvarez",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Oksana Bjørn",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Paolo Costa",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Quan Dvořák",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Ravi Eriksson",
+      "position_name": "Secretary",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Sasha Ferreira",
+      "position_name": "Board Member",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Tomas Gupta",
+      "position_name": "Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Uma Hansen",
+      "position_name": "Deputy Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Vito Ibrahim",
+      "position_name": "Treasurer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    }
+  ]
+}

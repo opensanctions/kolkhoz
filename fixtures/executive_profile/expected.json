@@ -1,3 +1,16 @@
-[
-  {"person": "Søren Bjørk", "position": "Chief Scientific Officer"}
-]
+{
+  "evidence_required": true,
+  "holders": [
+    {
+      "person_name": "Søren Bjørk",
+      "position_name": "Chief Scientific Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": "2019",
+      "position_end_date": null
+    }
+  ]
+}

@@ -1,8 +1,71 @@
-[
-  {"person": "Ingrid Sandberg", "position": "Chair of the Board"},
-  {"person": "Dmitri Volkov", "position": "Chief Executive Officer"},
-  {"person": "Adaeze Okoro", "position": "Chief Medical Officer"},
-  {"person": "Tomás Ribeiro", "position": "Chief Financial Officer"},
-  {"person": "Yuki Nakamura", "position": "Chief Operating Officer"},
-  {"person": "Françoise Lévêque", "position": "General Counsel"}
-]
+{
+  "evidence_required": false,
+  "holders": [
+    {
+      "person_name": "Ingrid Sandberg",
+      "position_name": "Chair of the Board",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Dmitri Volkov",
+      "position_name": "Chief Executive Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Adaeze Okoro",
+      "position_name": "Chief Medical Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Tomás Ribeiro",
+      "position_name": "Chief Financial Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Yuki Nakamura",
+      "position_name": "Chief Operating Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Françoise Lévêque",
+      "position_name": "General Counsel",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    }
+  ]
+}

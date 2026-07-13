@@ -1,7 +1,60 @@
-[
-  {"person": "Marek Dvořák", "position": "Chair of the Board"},
-  {"person": "Aisha Rahman", "position": "Chief Executive Officer"},
-  {"person": "Hiroshi Tanaka", "position": "Chief Financial Officer"},
-  {"person": "Elena Petrova", "position": "Chief Operating Officer"},
-  {"person": "Samuel Okafor", "position": "Independent Director"}
-]
+{
+  "evidence_required": false,
+  "holders": [
+    {
+      "person_name": "Marek Dvořák",
+      "position_name": "Chair of the Board",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Aisha Rahman",
+      "position_name": "Chief Executive Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Hiroshi Tanaka",
+      "position_name": "Chief Financial Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Elena Petrova",
+      "position_name": "Chief Operating Officer",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    },
+    {
+      "person_name": "Samuel Okafor",
+      "position_name": "Independent Director",
+      "person_dob": null,
+      "person_bio": null,
+      "person_country": null,
+      "position_description": null,
+      "position_jurisdiction": null,
+      "position_start_date": null,
+      "position_end_date": null
+    }
+  ]
+}

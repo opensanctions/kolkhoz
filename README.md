@@ -1,6 +1,6 @@
 # Kolkhoz
 
-Kolkhoz turns the internet into lists of politicians. It orchestrates web capture (via [Pravda](https://github.com/opensanctions/pravda)), LLM extraction, and structured storage to pull political position holders out of web pages.
+Kolkhoz turns the internet into lists of politicians. It orchestrates web capture (via the in-process [Pravda](https://github.com/opensanctions/pravda) async library), LLM extraction, and structured storage to pull political position holders out of web pages.
 
 ## Status
 
@@ -8,19 +8,30 @@ Early R&D. Currently exploring what a viable automated extraction pipeline looks
 
 ## What it does
 
-1. Sends URLs to Pravda for snapshotting (plaintext + rendered HTML + screenshot)
+1. Captures snapshots (plaintext + rendered HTML + screenshot) via the in-process Pravda library against a remote browser, Postgres, and an artifact store that Kolkhoz owns and runs
 2. Feeds snapshots to an LLM to extract structured "human / position" pairs
 3. Stores results in SQLite, linked to Pravda snapshot identifiers
 4. Exports the extracted holders as JSONL (one record per person/position observation), shaped for ingest by zavod
 
 ## Setup
 
-Requires uv and a running Pravda instance at `http://127.0.0.1:8000`.
+Requires uv. Kolkhoz embeds Pravda as an async library and
+owns the infrastructure Pravda connects to: a headed Chrome browser, a
+Postgres database, and an artifact store. Pravda ships on PyPI as
+`opensanctions-pravda` (imported as `pravda`); `uv sync` installs it.
+Bring the infrastructure up with Docker Compose:
 
 ```bash
 # Install dependencies
 uv sync
+
+# Start the browser (Playwright run-server) and Postgres
+docker compose up -d
 ```
+
+The `snapshot` and `extract` commands apply Pravda's packaged Alembic
+migrations to the Postgres database idempotently before use, so no separate
+migration step is needed.
 
 ## Usage
 

@@ -1,0 +1,49 @@
+# Kolkhoz-owned infrastructure for Pravda's in-process async client.
+#
+# Pravda connects from Kolkhoz's process to three things Kolkhoz owns and
+# runs here: a remote headed Chrome (Playwright run-server), an async
+# Postgres database, and the artifact store (a local path on disk by default,
+# configured via PRAVDA_STORAGE_BASE_PATH).
+#
+#   docker compose up -d
+#
+# With the defaults below, set in .env:
+#   PRAVDA_DATABASE_URL=postgresql+asyncpg://pravda:pravda@localhost:5432/pravda
+#   PRAVDA_BROWSER_WS_URL=ws://localhost:3000
+#   PRAVDA_STORAGE_BASE_PATH=./storage
+services:
+  browser:
+    # Headed Chrome under xvfb, exposed as a remote Playwright WebSocket
+    # server on port 3000. Published from the Pravda repository as
+    # ghcr.io/opensanctions/pravda-browser:latest.
+    image: ghcr.io/opensanctions/pravda-browser:latest
+    init: true
+    ports:
+      - "3000:3000"
+    # Playwright's server exposes an HTTP /json listing of its browser
+    # endpoints; it answers only once the WebSocket server is accepting
+    # connections, so this doubles as a readiness gate for clients.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/json"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: pravda
+      POSTGRES_PASSWORD: pravda
+      POSTGRES_DB: pravda
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pravda"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

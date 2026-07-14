@@ -24,8 +24,16 @@ class DatabaseConfig:
 
 
 @dataclass(frozen=True)
-class PravdaConfig:
-    url: str
+class PravdaSettings:
+    """Environment-backed settings for Pravda's in-process async client.
+
+    These three values are handed to Pravda's own ``PravdaConfig`` at the
+    application boundary; Kolkhoz no longer owns a Pravda URL.
+    """
+
+    database_url: str
+    browser_ws_url: str
+    storage_base_path: str
 
 
 @dataclass(frozen=True)
@@ -48,7 +56,7 @@ class PathsConfig:
 @dataclass(frozen=True)
 class Config:
     database: DatabaseConfig
-    pravda: PravdaConfig
+    pravda: PravdaSettings
     model: ModelConfig
     image: ImageConfig
     paths: PathsConfig
@@ -59,7 +67,11 @@ def load_config() -> Config:
     load_dotenv()
     return Config(
         database=DatabaseConfig(path=os.environ["KOLKHOZ_DB"]),
-        pravda=PravdaConfig(url=os.environ["PRAVDA_URL"]),
+        pravda=PravdaSettings(
+            database_url=os.environ["PRAVDA_DATABASE_URL"],
+            browser_ws_url=os.environ["PRAVDA_BROWSER_WS_URL"],
+            storage_base_path=os.environ["PRAVDA_STORAGE_BASE_PATH"],
+        ),
         model=ModelConfig(name=os.environ["OPENAI_MODEL"]),
         image=ImageConfig(
             tile_size=int(os.environ["IMAGE_TILE_SIZE"]),

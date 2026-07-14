@@ -6,9 +6,11 @@ Pravda snapshot we extracted from.
 
 Three tables:
 
-- ``Page``      one row per distinct URL. Carries the CSV metadata
-                (organization, dataset) and is the unit
-                re-extraction is driven from.
+- ``Page``      one row per distinct (dataset, URL). Carries the CSV
+                metadata (organization, dataset) and is the unit
+                re-extraction is driven from. The same URL may appear in
+                more than one dataset as separate pages, while the Pravda
+                snapshot it points at is shared across datasets.
 - ``Extraction`` one per (Page, snapshot). Records which Pravda snapshot we
                 read, which model extracted from it, and when. Re-running
                 extraction on a new snapshot makes a new row; Pravda tells
@@ -29,9 +31,14 @@ class Base(DeclarativeBase):
 
 class Page(Base):
     __tablename__ = "pages"
+    # Identity is (dataset, url): the same URL may be sourced into more than
+    # one dataset, and each gets its own page row. Pravda snapshots are still
+    # deduplicated by URL, but this provenance row is per (dataset, URL).
+    __table_args__ = (UniqueConstraint("dataset", "url"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    url: Mapped[str] = mapped_column(unique=True, index=True)
+    # Indexed (not unique) so a URL can be looked up across datasets.
+    url: Mapped[str] = mapped_column(index=True)
     organization: Mapped[str]
     # Which CSV / dataset this page was sourced from.
     dataset: Mapped[str]

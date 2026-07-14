@@ -10,14 +10,14 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 
 - **Python** 3.13+ managed by **uv**.
 - **SQLite** for structured results (extracted humans, positions, links to Pravda snapshots).
-- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)), published on PyPI as `opensanctions-pravda` (imported as `pravda`), for web page capture and storage, embedded as an in-process async library. Kolkhoz owns the infrastructure Pravda connects to — a headed Chrome browser (remote Playwright server), an async Postgres database, and an fsspec artifact store — run via `docker compose`. Connection settings are `PRAVDA_DATABASE_URL`, `PRAVDA_BROWSER_WS_URL`, and `PRAVDA_STORAGE_BASE_PATH` (see `.env`). Kolkhoz constructs Pravda's `PravdaConfig` at the CLI boundary, reads artifacts from the shared storage backend over fsspec, and applies Pravda's packaged migrations (`pravda.migrate`) idempotently before the `snapshot` and `extract` commands open a `Pravda` instance.
+- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)), published on PyPI as `opensanctions-pravda` (imported as `pravda`), for web page capture and storage, embedded as an in-process async library. Kolkhoz owns the infrastructure Pravda connects to — a headed Chrome browser (remote Playwright server), an async Postgres database, and an fsspec artifact store — run via `docker compose`. Connection settings are `PRAVDA_DATABASE_URL`, `PRAVDA_BROWSER_WS_URL`, and `PRAVDA_STORAGE_BASE_PATH` (see `.env`). Kolkhoz constructs Pravda's `PravdaConfig` at the CLI boundary, reads artifacts from the shared storage backend over fsspec, and applies Pravda's packaged migrations (`pravda.migrate`) idempotently before the `run` command opens a `Pravda` instance.
 
 ## Project structure
 
 ```
-kolkhoz/           # the package: cli.py (snapshot/extract/export), capture.py
-                   # (Pravda integration + migrations), extract.py, models.py,
-                   # sources.py, export.py, config.py, db.py
+kolkhoz/           # the package: cli.py (run/export), capture.py
+                   # (Pravda client + capture/artifact helpers), extract.py,
+                   # models.py, sources.py, export.py, config.py, db.py
 evaluate.py        # score the extraction pipeline against synthetic fixtures
 fixtures/          # one directory per fixture: page.html, expected.json, optional screenshot.png
 docker-compose.yml # Kolkhoz-owned browser (Playwright server) + Postgres

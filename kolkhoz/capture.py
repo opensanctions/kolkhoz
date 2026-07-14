@@ -1,9 +1,7 @@
 """Pravda integration and screenshot artifacts.
 
-- ``run_snapshots`` captures every URL through a single long-lived Pravda
-  instance (bounded by a semaphore) and records the pages in the database.
-- ``latest_snapshot`` queries Pravda's history for the newest successful
-  snapshot of a URL.
+- ``capture_urls`` captures each URL once, concurrently, through one
+  long-lived Pravda instance (bounded by a semaphore).
 - ``read_artifact`` reads a snapshot artifact blob from the shared fsspec
   storage backend Kolkhoz and Pravda both use.
 - ``is_blank`` / ``split_image`` are image primitives over a screenshot blob
@@ -21,11 +19,9 @@ import os
 
 import fsspec
 from PIL import Image
-from pravda import Pravda, PravdaConfig, Snapshot, migrate
-from sqlalchemy.orm import Session
+from pravda import Pravda, PravdaConfig, Snapshot
 
 from kolkhoz.config import PravdaSettings
-from kolkhoz.models import Page as PageRow
 
 log = logging.getLogger("kolkhoz")
 
@@ -53,19 +49,6 @@ def storage_filesystem(settings: PravdaSettings):
     """
     fs, _ = fsspec.core.url_to_fs(settings.storage_base_path)
     return fs
-
-
-async def latest_snapshot(pravda: Pravda, url: str) -> Snapshot | None:
-    """Return the newest successful snapshot of *url*, or None if there are none.
-
-    Pravda returns history newest first and persists capture failures with
-    ``error`` set, so the first error-free entry is the newest success.
-    """
-    snapshots = await pravda.snapshots(url)
-    for snapshot in snapshots:
-        if snapshot.error is None:
-            return snapshot
-    return None
 
 
 def read_artifact(fs, snapshot: Snapshot, filename: str | None) -> bytes:
@@ -135,46 +118,25 @@ def split_image(blob: bytes, tile: int, overlap: float) -> list[bytes]:
     return tiles
 
 
-async def run_snapshots(
-    inputs: list[tuple[str, list]],
-    concurrency: int,
-    settings: PravdaSettings,
-    engine,
-) -> None:
-    """Snapshot every URL across all datasets through one Pravda instance.
+async def capture_urls(
+    pravda: Pravda, urls: list[str], concurrency: int
+) -> dict[str, Snapshot]:
+    """Capture each URL once, concurrently, through one Pravda instance.
 
-    Pravda's schema is migrated to head first (idempotently). Then one
-    long-lived ``Pravda`` instance captures all unique URLs, bounded by a
-    semaphore so at most *concurrency* captures run at once. After capturing,
-    each dataset's pages are recorded in the database (a page is created once
-    per distinct URL).
+    At most *concurrency* captures run at once (an ``asyncio.Semaphore``
+    bounds them); each is otherwise independent. Returns a mapping of the
+    requested URL to the Snapshot Pravda persisted for it. Pravda persists
+    capture failures with ``error`` set rather than raising, so the mapping
+    covers every requested URL — callers decide how to treat errored
+    snapshots.
     """
-    urls = sorted({row.url for _, rows in inputs for row in rows})
-    log.info("%d unique URL(s) to snapshot", len(urls))
-
-    await migrate(settings.database_url)
-
     sem = asyncio.Semaphore(concurrency)
-    pravda = pravda_client(settings)
-    async with pravda:
 
-        async def snap(url: str) -> None:
-            async with sem:
-                snapshot = await pravda.snapshot(url)
-                log.info("snapshotted %s", snapshot.url)
+    async def snap(url: str) -> tuple[str, Snapshot]:
+        async with sem:
+            snapshot = await pravda.snapshot(url)
+            log.info("snapshotted %s", snapshot.url)
+            return url, snapshot
 
-        await asyncio.gather(*(snap(url) for url in urls))
-
-    with Session(engine) as session:
-        for dataset, rows in inputs:
-            for row in rows:
-                if session.query(PageRow).filter_by(url=row.url).first() is None:
-                    session.add(
-                        PageRow(
-                            url=row.url,
-                            organization=row.organization,
-                            dataset=dataset,
-                        )
-                    )
-            session.commit()
-            log.info("wrote %d page(s) for dataset %s", len(rows), dataset)
+    pairs = await asyncio.gather(*(snap(url) for url in urls))
+    return dict(pairs)

@@ -29,7 +29,7 @@ uv sync
 docker compose up -d
 ```
 
-The `snapshot` and `extract` commands apply Pravda's packaged Alembic
+The `run` command applies Pravda's packaged Alembic
 migrations to the Postgres database idempotently before use, so no separate
 migration step is needed.
 
@@ -40,15 +40,13 @@ locations are fsspec URLs set via `INPUT_BASE_PATH` and `OUTPUT_BASE_PATH`
 in `.env` (a local dir or a `gs://`/`s3://` bucket prefix):
 
 ```bash
-# Snapshot all URLs from every CSV in the input directory (INPUT_BASE_PATH)
-# through Pravda, recording pages in the DB. Each CSV is its own dataset,
-# named after the file's stem.
-uv run kolkhoz snapshot
-
-# Extract position holders from the latest snapshot of each page in the DB
-uv run kolkhoz extract
-uv run kolkhoz extract -d hio_leadership   # one dataset only
-uv run kolkhoz extract -n 20               # random sample of 20
+# Capture every URL from every CSV in the input directory (INPUT_BASE_PATH)
+# through Pravda, then extract position holders from each snapshot. Each CSV
+# is its own dataset, named after the file's stem.
+uv run kolkhoz run
+uv run kolkhoz run -d hio_leadership   # one dataset only
+uv run kolkhoz run -n 20               # random sample of 20 page inputs
+uv run kolkhoz run -c 10               # up to 10 concurrent captures
 
 # Export extracted holders as JSONL, one file per dataset under
 # <OUTPUT_BASE_PATH>/<dataset>/<date>.jsonl

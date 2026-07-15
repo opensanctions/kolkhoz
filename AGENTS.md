@@ -9,8 +9,8 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 ## Stack
 
 - **Python** 3.13+ managed by **uv**.
-- **SQLite** for structured results (extracted humans, positions, links to Pravda snapshots).
-- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)), published on PyPI as `opensanctions-pravda` (imported as `pravda`), for web page capture and storage, embedded as an in-process async library. Kolkhoz owns the infrastructure Pravda connects to — a headed Chrome browser (remote Playwright server), an async Postgres database, and an fsspec artifact store — run via `docker compose`. Connection settings are `PRAVDA_DATABASE_URL`, `PRAVDA_BROWSER_WS_URL`, and `PRAVDA_STORAGE_BASE_PATH` (see `.env`). Kolkhoz constructs Pravda's `PravdaConfig` at the CLI boundary, reads artifacts from the shared storage backend over fsspec, and applies Pravda's packaged migrations (`pravda.migrate`) idempotently before the `run` command opens a `Pravda` instance.
+- **PostgreSQL** for structured results (extracted humans, positions, links to Pravda snapshots), sharing Pravda's database and async SQLAlchemy connection URL.
+- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)), published on PyPI as `opensanctions-pravda` (imported as `pravda`), for web page capture and storage, embedded as an in-process async library. Kolkhoz owns the infrastructure Pravda connects to — a headed Chrome browser (remote Playwright server), an async Postgres database, and an fsspec artifact store — run via `docker compose`. Connection settings are `PRAVDA_DATABASE_URL`, `PRAVDA_BROWSER_WS_URL`, and `PRAVDA_STORAGE_BASE_PATH` (see `.env`). Kolkhoz and Pravda use the same async SQLAlchemy database URL and asyncpg driver. Kolkhoz constructs Pravda's `PravdaConfig` at the CLI boundary, reads artifacts from the shared storage backend over fsspec, and applies Pravda's packaged migrations (`pravda.migrate`) idempotently before the `run` command opens a `Pravda` instance.
 
 ## Project structure
 

@@ -13,7 +13,7 @@ from datetime import datetime
 
 import fsspec
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from kolkhoz.config import PathsConfig
 from kolkhoz.models import Extraction as ExtractionRow
@@ -82,9 +82,9 @@ def holder_to_record(
     return {name: record[name] for name in EXPORT_FIELDS}
 
 
-def run_export(engine, paths: PathsConfig) -> None:
+async def run_export(engine, paths: PathsConfig) -> None:
     """Export the latest extraction of every page as per-dataset JSONL."""
-    with Session(engine) as session:
+    async with AsyncSession(engine) as session:
         # Only the most recent extraction per page, so re-running extraction
         # doesn't multiply the output.
         latest = (
@@ -102,7 +102,8 @@ def run_export(engine, paths: PathsConfig) -> None:
             .join(PageRow, ExtractionRow.page_id == PageRow.id)
         )
         groups: dict[str, list[tuple[PageRow, ExtractionRow, HolderRow]]] = {}
-        for holder, extraction, page in session.execute(stmt).all():
+        result = await session.execute(stmt)
+        for holder, extraction, page in result.all():
             groups.setdefault(page.dataset, []).append((page, extraction, holder))
 
     fs, base = fsspec.core.url_to_fs(paths.output_base_path)

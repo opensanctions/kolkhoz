@@ -10,14 +10,14 @@ Early R&D. Currently exploring what a viable automated extraction pipeline looks
 
 1. Captures snapshots (plaintext + rendered HTML + screenshot) via the in-process Pravda library against a remote browser, Postgres, and an artifact store that Kolkhoz owns and runs
 2. Feeds snapshots to an LLM to extract structured "human / position" pairs
-3. Stores results in SQLite, linked to Pravda snapshot identifiers
+3. Stores results in the shared PostgreSQL database, linked to Pravda snapshot identifiers
 4. Exports the extracted holders as JSONL (one record per person/position observation), shaped for ingest by zavod
 
 ## Setup
 
 Requires uv. Kolkhoz embeds Pravda as an async library and
 owns the infrastructure Pravda connects to: a headed Chrome browser, a
-Postgres database, and an artifact store. Pravda ships on PyPI as
+Postgres database shared by Pravda and Kolkhoz, and an artifact store. Pravda ships on PyPI as
 `opensanctions-pravda` (imported as `pravda`); `uv sync` installs it.
 Bring the infrastructure up with Docker Compose:
 
@@ -29,9 +29,10 @@ uv sync
 docker compose up -d
 ```
 
-The `run` command applies Pravda's packaged Alembic
-migrations to the Postgres database idempotently before use, so no separate
-migration step is needed.
+The `run` command applies Pravda's packaged Alembic migrations and creates
+Kolkhoz's tables in the same Postgres database idempotently before use, so no
+separate migration step is needed. Both use the same async SQLAlchemy
+`PRAVDA_DATABASE_URL` and `asyncpg` driver.
 
 ## Usage
 

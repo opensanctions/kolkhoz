@@ -17,7 +17,8 @@ from datetime import datetime
 import click
 from openai import OpenAI
 from pravda import Snapshot, migrate
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from kolkhoz.capture import (
     capture_urls,
@@ -27,7 +28,7 @@ from kolkhoz.capture import (
     storage_filesystem,
 )
 from kolkhoz.config import Config, load_config
-from kolkhoz.db import init_engine
+from kolkhoz.db import database_engine
 from kolkhoz.extract import (
     extract,
     flatten_persons,
@@ -65,13 +66,13 @@ class ExtractionStatus:
     holders: int
 
 
-def extract_snapshot(
+async def extract_snapshot(
     page: PageRow,
     snapshot: Snapshot,
     fs,
     config: Config,
     client: OpenAI,
-    session: Session,
+    session: AsyncSession,
 ) -> ExtractionStatus:
     """Extract and persist holders from one (page, snapshot) pair.
 
@@ -85,10 +86,8 @@ def extract_snapshot(
     short-circuits before any read or model call and returns ``wrote=False``.
     """
     snapshot_id = str(snapshot.id)
-    already = (
-        session.query(ExtractionRow)
-        .filter_by(page_id=page.id, snapshot_id=snapshot_id)
-        .first()
+    already = await session.scalar(
+        select(ExtractionRow).filter_by(page_id=page.id, snapshot_id=snapshot_id)
     )
     if already is not None:
         log.info(
@@ -159,10 +158,23 @@ async def run_pipeline(
     sample: int | None,
     concurrency: int,
     config: Config,
-    engine,
     client: OpenAI,
 ) -> None:
-    """Unified capture + extraction over the selected page inputs.
+    """Run the pipeline with a database engine that is always disposed."""
+    await migrate(config.pravda.database_url)
+    async with database_engine(config.pravda.database_url) as engine:
+        await _run_pipeline(inputs, sample, concurrency, config, client, engine)
+
+
+async def _run_pipeline(
+    inputs: list[tuple[str, list[InputRow]]],
+    sample: int | None,
+    concurrency: int,
+    config: Config,
+    client: OpenAI,
+    engine: AsyncEngine,
+) -> None:
+    """Capture and extract the selected page inputs.
 
     Builds one association per distinct (dataset, URL) across the selected
     datasets: a URL repeated within a dataset collapses to one association,
@@ -182,8 +194,6 @@ async def run_pipeline(
     set) are skipped with a clear warning rather than treated as success.
     Writes commit once at the end.
     """
-    await migrate(config.pravda.database_url)
-
     # One association per distinct (dataset, URL), keeping the first row's
     # organization. A URL repeated within a dataset collapses to one
     # association; the same URL across datasets is several associations.
@@ -206,12 +216,12 @@ async def run_pipeline(
 
     # Register Page rows under (dataset, URL) identity; existing rows are
     # left as-is so duplicate input rows do no insert work.
-    with Session(engine) as session:
+    async with AsyncSession(engine) as session:
         for dataset, url, organization in associations:
-            if (
-                session.query(PageRow).filter_by(dataset=dataset, url=url).first()
-                is None
-            ):
+            page = await session.scalar(
+                select(PageRow).filter_by(dataset=dataset, url=url)
+            )
+            if page is None:
                 session.add(
                     PageRow(
                         url=url,
@@ -219,7 +229,7 @@ async def run_pipeline(
                         dataset=dataset,
                     )
                 )
-        session.commit()
+        await session.commit()
 
     fs = storage_filesystem(config.pravda)
     pravda = pravda_client(config.pravda)
@@ -228,7 +238,7 @@ async def run_pipeline(
         # objects returned, never re-querying Pravda's history.
         captures = await capture_urls(pravda, urls, concurrency)
 
-        with Session(engine) as session:
+        async with AsyncSession(engine) as session:
             wrote = 0
             hits = 0
             for dataset, url, _ in associations:
@@ -236,15 +246,21 @@ async def run_pipeline(
                 if snapshot.error is not None:
                     log.warning("  skip %s — capture failed: %s", url, snapshot.error)
                     continue
-                page = session.query(PageRow).filter_by(dataset=dataset, url=url).one()
-                status = extract_snapshot(page, snapshot, fs, config, client, session)
+                page = await session.scalar(
+                    select(PageRow).filter_by(dataset=dataset, url=url)
+                )
+                if page is None:
+                    raise RuntimeError(f"page was not registered: {dataset} {url}")
+                status = await extract_snapshot(
+                    page, snapshot, fs, config, client, session
+                )
                 if status.wrote:
                     wrote += 1
                     if status.holders > 0:
                         hits += 1
-            session.commit()
+            await session.commit()
 
-    log.info("wrote %d record(s) → %s", wrote, config.database.path)
+    log.info("wrote %d extraction record(s) to Postgres", wrote)
     log.info("extraction: %d hit, %d miss", hits, wrote - hits)
 
 
@@ -274,7 +290,6 @@ async def run_pipeline(
 )
 def run_cmd(dataset: str | None, sample: int | None, concurrency: int) -> None:
     config = load_config()
-    engine = init_engine(config.database)
     client = OpenAI()
     inputs = load_inputs(config.paths.input_base_path)
     if dataset is not None:
@@ -282,7 +297,7 @@ def run_cmd(dataset: str | None, sample: int | None, concurrency: int) -> None:
     log.info("%d input CSV(s)", len(inputs))
     for dataset_name, rows in inputs:
         log.info("dataset %s: %d row(s)", dataset_name, len(rows))
-    asyncio.run(run_pipeline(inputs, sample, concurrency, config, engine, client))
+    asyncio.run(run_pipeline(inputs, sample, concurrency, config, client))
 
 
 @cli.command(
@@ -295,8 +310,12 @@ def run_cmd(dataset: str | None, sample: int | None, concurrency: int) -> None:
 )
 def export_cmd() -> None:
     config = load_config()
-    engine = init_engine(config.database)
-    run_export(engine, config.paths)
+
+    async def export() -> None:
+        async with database_engine(config.pravda.database_url) as engine:
+            await run_export(engine, config.paths)
+
+    asyncio.run(export())
 
 
 if __name__ == "__main__":

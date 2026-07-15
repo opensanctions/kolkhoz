@@ -1,8 +1,8 @@
 """SQLAlchemy models — the Kolkhoz domain.
 
-Kolkhoz keeps its own data in SQLite. Pravda owns snapshots and their
-content hashes; we only store the provenance that links a Page to the
-Pravda snapshot we extracted from.
+Kolkhoz and Pravda share a PostgreSQL database while keeping separate tables.
+Pravda owns snapshots and their content hashes; we only store the provenance
+that links a Page to the Pravda snapshot we extracted from.
 
 Three tables:
 

@@ -15,20 +15,11 @@ from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
-class DatabaseConfig:
-    path: str
-
-    @property
-    def url(self) -> str:
-        return f"sqlite:///{self.path}"
-
-
-@dataclass(frozen=True)
 class PravdaSettings:
     """Environment-backed settings for Pravda's in-process async client.
 
     These three values are handed to Pravda's own ``PravdaConfig`` at the
-    application boundary; Kolkhoz no longer owns a Pravda URL.
+    application boundary. The database URL is also used by Kolkhoz.
     """
 
     database_url: str
@@ -55,7 +46,6 @@ class PathsConfig:
 
 @dataclass(frozen=True)
 class Config:
-    database: DatabaseConfig
     pravda: PravdaSettings
     model: ModelConfig
     image: ImageConfig
@@ -66,7 +56,6 @@ def load_config() -> Config:
     """Load and validate all settings from the environment (and ``.env``)."""
     load_dotenv()
     return Config(
-        database=DatabaseConfig(path=os.environ["KOLKHOZ_DB"]),
         pravda=PravdaSettings(
             database_url=os.environ["PRAVDA_DATABASE_URL"],
             browser_ws_url=os.environ["PRAVDA_BROWSER_WS_URL"],

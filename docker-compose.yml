@@ -1,9 +1,9 @@
 # Kolkhoz-owned infrastructure for Pravda's in-process async client.
 #
 # Pravda connects from Kolkhoz's process to three things Kolkhoz owns and
-# runs here: a remote headed Chrome (Playwright run-server), an async
-# Postgres database, and the artifact store (a local path on disk by default,
-# configured via PRAVDA_STORAGE_BASE_PATH).
+# runs here: a remote headed Chrome (Playwright run-server), a Postgres
+# database shared by Pravda and Kolkhoz, and the artifact store (a local path
+# on disk by default, configured via PRAVDA_STORAGE_BASE_PATH).
 #
 #   docker compose up -d
 #

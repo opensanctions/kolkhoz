@@ -16,9 +16,9 @@ services:
     # Headed Chrome under xvfb, exposed as a remote Playwright WebSocket
     # server on port 3000. Published from the Pravda repository as
     # ghcr.io/opensanctions/pravda-browser. Pinned to the opensanctions-pravda
-    # version in pyproject.toml (>=0.1.2) so the bundled Playwright server
+    # version in pyproject.toml (>=0.1.3) so the bundled Playwright server
     # version matches the client pinned transitively through that package.
-    image: ghcr.io/opensanctions/pravda-browser:0.1.2
+    image: ghcr.io/opensanctions/pravda-browser:0.1.3
     init: true
     ports:
       - "3000:3000"

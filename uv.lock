@@ -944,7 +944,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.4.1" },
     { name = "fsspec", extras = ["gcs"], specifier = ">=2026.6.0" },
     { name = "openai", specifier = ">=2.41.1" },
-    { name = "opensanctions-pravda", specifier = ">=0.1.2" },
+    { name = "opensanctions-pravda", specifier = ">=0.1.3" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "sqlalchemy", specifier = ">=2.0.51" },
@@ -1140,7 +1140,7 @@ wheels = [
 
 [[package]]
 name = "opensanctions-pravda"
-version = "0.1.2"
+version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -1150,9 +1150,9 @@ dependencies = [
     { name = "playwright" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7c/03/636f84ee038fa34674ce61df2afdbf5eaf7a00a047b2ead857adc84c61bb/opensanctions_pravda-0.1.2.tar.gz", hash = "sha256:f77d4b6678fd2c65da0e42a33728c0b989ed326324a98007a7c1faa610ec31a8", size = 23341, upload-time = "2026-07-14T21:00:40.897Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/70/91c99daf3ef4f74c428d0614fa9184fb332e5c94582e8ca7a50233c39d63/opensanctions_pravda-0.1.3.tar.gz", hash = "sha256:f3610abde00cac4bc187d1070c86c33843b863e652cd557029d2bffb994cfcfc", size = 13719, upload-time = "2026-07-15T15:33:46.299Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/43/4aa4bcb4aa7ef6093a79885edd8223064a17975b57e6e947564886574294/opensanctions_pravda-0.1.2-py3-none-any.whl", hash = "sha256:efde4de4c753b9d54139a777d98aedf89b0c560672948ee5d2f91932a18bdf68", size = 29095, upload-time = "2026-07-14T21:00:39.603Z" },
+    { url = "https://files.pythonhosted.org/packages/15/11/89708ef439034719fb9e6ba276aedbf23d9665da32fc401f3b4a16f08185/opensanctions_pravda-0.1.3-py3-none-any.whl", hash = "sha256:60f997298567e2c9d299c1e626ba35ba52c1fc9ff7f598f2ea72976058786dbd", size = 18462, upload-time = "2026-07-15T15:33:45.116Z" },
 ]
 
 [[package]]

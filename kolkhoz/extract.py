@@ -252,10 +252,9 @@ class Extraction(BaseModel):
 def flatten_persons(extraction: Extraction) -> list[dict]:
     """Flatten the nested extraction into one dict per (person, position).
 
-    Person-level fields repeat across a person's positions so every flat row
-    is self-contained — matching the Holder table and the JSONL export. The
-    dict keys are the flat storage/export names; this is the only place that
-    knows how nested maps to flat.
+    Person-level fields repeat across a person's positions so every JSONL row
+    is self-contained. The dict keys are the flat output names; this is the
+    only place that knows how nested maps to flat.
     """
     rows: list[dict] = []
     for person in extraction.persons:

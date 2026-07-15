@@ -929,7 +929,6 @@ dependencies = [
     { name = "opensanctions-pravda" },
     { name = "pillow" },
     { name = "python-dotenv" },
-    { name = "sqlalchemy" },
 ]
 
 [package.dev-dependencies]
@@ -947,7 +946,6 @@ requires-dist = [
     { name = "opensanctions-pravda", specifier = ">=0.1.3" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "sqlalchemy", specifier = ">=2.0.51" },
 ]
 
 [package.metadata.requires-dev]

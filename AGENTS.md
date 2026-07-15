@@ -9,15 +9,15 @@ Kolkhoz is an orchestrator that turns raw web pages into structured data about p
 ## Stack
 
 - **Python** 3.13+ managed by **uv**.
-- **PostgreSQL** for structured results (extracted humans, positions, links to Pravda snapshots), sharing Pravda's database and async SQLAlchemy connection URL.
-- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)), published on PyPI as `opensanctions-pravda` (imported as `pravda`), for web page capture and storage, embedded as an in-process async library. Kolkhoz owns the infrastructure Pravda connects to — a headed Chrome browser (remote Playwright server), an async Postgres database, and an fsspec artifact store — run via `docker compose`. Connection settings are `PRAVDA_DATABASE_URL`, `PRAVDA_BROWSER_WS_URL`, and `PRAVDA_STORAGE_BASE_PATH` (see `.env`). Kolkhoz and Pravda use the same async SQLAlchemy database URL and asyncpg driver. Kolkhoz constructs Pravda's `PravdaConfig` at the CLI boundary, reads artifacts from the shared storage backend over fsspec, and applies Pravda's packaged migrations (`pravda.migrate`) idempotently before the `run` command opens a `Pravda` instance.
+- **Pravda** ([github.com/opensanctions/pravda](https://github.com/opensanctions/pravda)), published on PyPI as `opensanctions-pravda` (imported as `pravda`), for web page capture and storage, embedded as an in-process async library. Kolkhoz owns the infrastructure Pravda connects to — a headed Chrome browser (remote Playwright server), an async Postgres database, and an fsspec artifact store — run via `docker compose`. Connection settings are `PRAVDA_DATABASE_URL`, `PRAVDA_BROWSER_WS_URL`, and `PRAVDA_STORAGE_BASE_PATH` (see `.env`). Kolkhoz constructs Pravda's `PravdaConfig` at the CLI boundary, reads artifacts from the shared storage backend over fsspec, and applies Pravda's packaged migrations (`pravda.migrate`) idempotently before the `run` command opens a `Pravda` instance.
+- Kolkhoz does not persist extraction results. Each `run` writes only that run's records as JSONL to `OUTPUT_BASE_PATH`; PostgreSQL is used only by Pravda.
 
 ## Project structure
 
 ```
-kolkhoz/           # the package: cli.py (run/export), capture.py
+kolkhoz/           # the package: cli.py (run), capture.py
                    # (Pravda client + capture/artifact helpers), extract.py,
-                   # models.py, sources.py, export.py, config.py, db.py
+                   # sources.py, export.py, config.py
 evaluate.py        # score the extraction pipeline against synthetic fixtures
 fixtures/          # one directory per fixture: page.html, expected.json, optional screenshot.png
 docker-compose.yml # Kolkhoz-owned browser (Playwright server) + Postgres
